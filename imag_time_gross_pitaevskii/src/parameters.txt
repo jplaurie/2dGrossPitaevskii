@@ -1,0 +1,10 @@
+Nx = 512 Ny = 512
+Lx = 6.28319 Ly = 6.28319
+g = 400
+chemical potential = 400
+================ Timestepping =========================
+FLAG_TIMESTEP_ETDRK = 1
+FLAG_ETDRK_ORDER = 4
+dt = 1e-05
+nsteps = 200000
+outstep = 100

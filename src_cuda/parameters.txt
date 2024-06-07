@@ -1,0 +1,24 @@
+Nx = 512 Ny = 512
+Lx = 6.28319 Ly = 6.28319
+g = 400
+chemical potential = 400
+================ Dissipation =====================
+FLAG_GINZBURG_LANDAU_DISS = 0
+Ginzburg dissipation gamma = 0
+nupower = 1 nu = 0
+alphapower = 0 alpha = 0
+================ Timestepping =========================
+FLAG_TIMESTEP_ETDRK = 1
+FLAG_ETDRK_ORDER = 4
+dt = 1e-05
+nsteps = 99999999
+outstep = 100000
+================ Forcing =========================
+FLAG_FORCE_TYPE = 0
+FLAG_FORCE_EXP = 0
+FLAG_FORCE_AMP_RESCALE = 0
+kf = 64 dk = 2 Amp = 0.005
+force_power = 4
+================ Sound Filter ====================
+FLAG_SOUND_FILTER= 0
+sigma = 3

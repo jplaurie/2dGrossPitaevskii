@@ -2,9 +2,11 @@
 
 Numerical code for  2d Gross Pitaevskii equation
 
-$$i\frac{\partial \psi}{\partial t}=-\frac{1}{2}\Delta\psi - \frac{\mu}{2}\psi +\frac{g}{2}|\psi|^2\psi -D+F$$
+```math
+i\frac{\partial \psi}{\partial t}=-\frac{1}{2}\Delta\psi - \frac{\mu}{2}\psi +\frac{g}{2}|\psi|^2\psi - i\nu(-\Delta)^p \psi - i\alpha(-\Delta)^{-q} \psi+F
+```
 
-**Paramters:** Chemical potential $\mu$, nonlinearity $g$.
+**Paramters:** Chemical potential $`\mu`$, nonlinearity $`g`$.
 
 **Boundary Conditions:** Periodic boundary conditions.
 
