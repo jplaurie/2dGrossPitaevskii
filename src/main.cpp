@@ -29,9 +29,11 @@ using namespace arma;
 
 int main(){
 
+int file_number_start = 0;
 int file_number = 0;
 int avg_number = 0;
-double run_time =0.0;
+double run_time_start = 0.0;
+double run_time = 0.0;
 
 //clock variables
 double start = 0.0;
@@ -107,7 +109,7 @@ mt19937_64 generator(seed1);
 normal_distribution<double> distribution(0.0,1.0);
 
 //reads in initial data
-readData(psi, psi_hat, run_time, file_number, FFTN);      
+readData(psi, psi_hat, run_time_start, file_number_start, FFTN);      
     
 system("mkdir ./output/");	
 
@@ -183,12 +185,13 @@ for( int time_step = 1; time_step <= total_steps; time_step++ ){
 			}
     
 	}
-		else{ //checks to make sure no other method has been defined
+	else{ //checks to make sure no other method has been defined
         	cout << "FLAG_TIMETEP_METHOD invalid" << endl;
             exit(1);    
 	}
 
 	 //printing of diagonistics and state
+	 //cout << run_time << " " << output_time  << " " << int(run_time / output_time) << " " << file_number << endl;
     if( int(run_time / output_time) == file_number + 1){
 
 		//increments file number
@@ -203,36 +206,30 @@ for( int time_step = 1; time_step <= total_steps; time_step++ ){
 		fftw_execute(IFFTN);
          
 		//prints wave function                  
-        printWavefunction(file_number,psi); //computes intensity
+        printWavefunction(file_number_start + file_number,psi); //computes intensity
 
 		if(FLAG_OUTPUT_DIAGONOSTICS == true){
 		
-		/*	spectrum(psi_hat,wave_spec_avg,energy_spec_avg, out_count,avg_count); //computes spectrum
-			psi_t = nonlinearterm(psi_hat,0.0, L ,G, psi_M, psi_hat_M, FFT, IFFT);
- 			flux(psi_hat, psi_t, wave_flux_avg,energy_flux_avg, out_count,avg_count);
-			energy(runtime,out_count,psi_hat, psi,E_out);       //computes energy
-			intensity(runtime,out_count,psi); //computes intensity
-*/
 
 			//compute and prints waveaction
             computeWaveaction( psi_hat, waveaction);
-            printWaveaction( run_time, file_number,  waveaction);
+            printWaveaction(run_time_start + run_time, file_number_start + file_number,  waveaction);
 
             //compute and prints energy
             computeEnergy(psi_hat,  psi,linear_energy,  potential_energy,  nonlinear_energy);
-            printEnergy(run_time, file_number,  linear_energy, potential_energy, nonlinear_energy);
+            printEnergy(run_time_start + run_time, file_number_start + file_number,  linear_energy, potential_energy, nonlinear_energy);
 
             //compute and print dissipation rates           
             computeDissipationRate(psi_hat, waveaction_dissipation_rate_alpha, waveaction_dissipation_rate_nu,energy_dissipation_rate_alpha,  energy_dissipation_rate_nu);
-            printDissipationRate(run_time, file_number, waveaction_dissipation_rate_alpha, waveaction_dissipation_rate_nu, energy_dissipation_rate_alpha, energy_dissipation_rate_nu);
+            printDissipationRate(run_time_start + run_time, file_number_start + file_number, waveaction_dissipation_rate_alpha, waveaction_dissipation_rate_nu, energy_dissipation_rate_alpha, energy_dissipation_rate_nu);
 
             //compute and print spectrum
             computeSpectrum(psi_hat, wave_spectrum);
-            printSpectrum(file_number, avg_number, wave_spectrum, wave_spectrum_avg);
+            printSpectrum(file_number_start + file_number, avg_number, wave_spectrum, wave_spectrum_avg);
 
             //compute and print flux
             computeFlux(psi_hat,  L, G, psi_M , psi_hat_M,  wave_flux , energy_flux, FFT, IFFT );
-            printFlux(file_number, avg_number, wave_flux,  energy_flux, wave_flux_avg, energy_flux_avg );
+            printFlux(file_number_start + file_number, avg_number, wave_flux,  energy_flux, wave_flux_avg, energy_flux_avg );
 
 
 
@@ -242,12 +239,12 @@ for( int time_step = 1; time_step <= total_steps; time_step++ ){
 		psi_hat = psi_hat_temp;
 
 		//record some basic info to terminal
-		cout << "time = " << run_time << " file = " << file_number << " Energy = " << linear_energy + potential_energy + nonlinear_energy << endl;        //outputs runtime to screen
+		cout << "time = " << run_time_start + run_time << " file = " << file_number_start + file_number << " Energy = " << linear_energy + potential_energy + nonlinear_energy << endl;        //outputs runtime to screen
 
 		//overwrites curframe.dat
 		ofstream fout_count("./data/curframe.dat");
 		fout_count << scientific; fout_count.precision(12);
-		fout_count << run_time << " " << file_number << endl;    
+		fout_count << run_time_start + run_time << " " << file_number_start + file_number << endl;    
     }
 }
     

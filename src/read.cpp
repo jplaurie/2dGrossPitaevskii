@@ -15,7 +15,7 @@ using namespace arma;
 
 static double ignore_in, real_part, imag_part;
 
-void readData(cx_mat & psi,cx_mat & psi_hat, double & run_time, int & file_number, fftw_plan FFTN){
+void readData(cx_mat & psi,cx_mat & psi_hat, double & run_time_start, int & file_number_start, fftw_plan FFTN){
     
 /*
     reads in initial data located in file with number given by curframe.dat
@@ -27,11 +27,11 @@ imag_part=0.0;
     
 fstream filein("./data/curframe.dat");
 filein.precision(12);
-filein >> run_time >> file_number;
+filein >> run_time_start >> file_number_start;
     
-if(file_number < 0){
+if(file_number_start < 0){
 
-	file_number = 0;
+	file_number_start = 0;
 
 	ofstream fout_read("./data/psi.000000");
 	fout_read.precision(12);
@@ -46,14 +46,14 @@ if(file_number < 0){
 
 	cout << "file_number < 0" << endl; 
 	cout << "Simulation starting...from zero state" << endl;
-	cout << "time = " << run_time << endl;
+	cout << "time = " << run_time_start << endl;
 	cout << "file_number = 0" << endl; 
 
 }
 else{
 
 	ostringstream in_data;
-	in_data << "./data/psi." << setw(6) << setfill('0') << file_number<< ends;
+	in_data << "./data/psi." << setw(6) << setfill('0') << file_number_start << ends;
 	string filename = in_data.str();
 	ifstream filein2(filename.c_str());
 	filein2.precision(12);
@@ -64,8 +64,8 @@ else{
 			psi(i,j)= complex<double>(real_part,imag_part);
 		}    
 	}
-	cout << "Loading data from file psi." << setw(6) << setfill('0') << file_number << endl;
-	cout << "runtime of simulation = " << run_time << endl;
+	cout << "Loading data from file psi." << setw(6) << setfill('0') << file_number_start << endl;
+	cout << "runtime of simulation = " << run_time_start << endl;
 	cout << "Loading successful" << endl;
 }
     

@@ -1,6 +1,5 @@
 #include <armadillo>
 #include <fftw3.h>
-
 #include <complex>
 #include <cmath>
 #include "const.h"
@@ -9,8 +8,6 @@ using namespace std;
 using namespace arma;
 
 static cx_mat Npsi_temp_M(Mx,My,fill::zeros), psi_hat_N(Nx,Ny,fill::zeros);
-
-
 
 cx_mat nonlinear( cx_mat A , double da, cx_mat L,cx_mat G, cx_mat & psi_M,cx_mat & psi_hat_M, fftw_plan FFT, fftw_plan IFFT){
     

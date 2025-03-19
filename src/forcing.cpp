@@ -158,6 +158,47 @@ else if(FLAG_FORCING_TYPE == "exponential"){
 		}       		
 	}
 }
+else if(FLAG_FORCING_TYPE == "exp-log"){
+	
+	famp.zeros();
+	waveaction_inj = 0.0;
+	energy_inj = 0.0;
+	
+    
+	for(int j = 0; j < Ny/2; j++){
+		for(int i = 0; i < Nx/2; i++){
+        
+		k = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
+            
+		famp(i,j) = force_amplitude * exp(-0.5*pow(log(k/kf)/sigmaf,2.0));
+		waveaction_inj += pow(famp(i,j),2.0);
+		energy_inj += pow(famp(i,j),2.0)*( - c *k*k);
+		forcing_modes += 1;
+            
+		k = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
+           
+		famp(Nx-i-1,j) =  force_amplitude * exp(-0.5*pow(log(k/kf)/sigmaf,2.0));
+		waveaction_inj += pow(famp(Nx-i-1,j),2.0);
+		energy_inj += pow(famp(Nx-i-1,j),2.0)*( - c * k*k);
+		forcing_modes += 1;
+            
+		k = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
+            
+		famp(i,Ny-j-1) = force_amplitude *  exp(-0.5*pow(log(k/kf)/sigmaf,2.0));
+		waveaction_inj += pow(famp(i,Ny-j-1),2.0);
+		energy_inj += pow(famp(i,Ny-j-1),2.0)*(-c * k*k);
+		forcing_modes += 1;
+
+		k = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
+          
+		famp(Nx-i-1,Ny-j-1) =  force_amplitude * exp(-0.5*pow(log(k/kf)/sigmaf,2.0));
+		waveaction_inj += pow(famp(Nx-i-1,Ny-j-1),2.0);
+		energy_inj += pow(famp(Nx-i-1,Ny-j-1),2.0)*(-c * k*k);
+		forcing_modes += 1;
+          		
+		}       		
+	}
+}
 else{
     cout << "FLAG_FORCING_TYPE not defined" << endl;
     exit(1);

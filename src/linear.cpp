@@ -74,8 +74,10 @@ for(int j= 0; j < Ny/2; j++){
         }
     }
 }
-
 }
+
+
+
 if(FLAG_HYPO_DISSIPATION == true){
     // hypoviscosity alpha...
 for(int j= 0; j < Ny/2; j++){
