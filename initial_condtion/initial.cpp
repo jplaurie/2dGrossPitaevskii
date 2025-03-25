@@ -25,9 +25,10 @@ const double g = 1000.0;
 const double m_eps = 1.e-8;
 const double dipole_distance = pi/8.0;  // original distance pi/4.0;
 const double dk = 2.0;
-const double kf = 32.0;
-const double Amp = 0.015;
-const bool FLAG_INITIAL_TYPE = 0;
+const double kf = 16.0;
+const double sigmaf = 0.05;
+const double force_amplitude = 0.015;
+const std::string FLAG_INITIAL_TYPE = "log-exp"; // "annulus", "log-exp", "inprint"
 const bool FLAG_READ_IN_FROM_FILE = 0;
 
 
@@ -54,7 +55,7 @@ uniform_real_distribution<double> distribution(0.0,2.0*pi);
 psi_hat.zeros();
 
 
-if(FLAG_INITIAL_TYPE==0){
+if(FLAG_INITIAL_TYPE == "annulus"){
 for(int j =0; j < Ny/2; j++){
         for(int i =0; i < Nx/2; i++){
 
@@ -64,26 +65,26 @@ for(int j =0; j < Ny/2; j++){
                 kk = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
 
                 if( abs(kk-kf) < dk){
-                        psi_hat(i,j) = Amp*complex<double>(cos(phase),sin(phase));
+                        psi_hat(i,j) = force_amplitude*complex<double>(cos(phase),sin(phase));
                 }
                    phase= distribution(generator);
 
                 kk = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
 
                 if( abs(kk-kf) < dk){
-                        psi_hat(Nx-i-1,j)= Amp*complex<double>(cos(phase),sin(phase));
+                        psi_hat(Nx-i-1,j)= force_amplitude*complex<double>(cos(phase),sin(phase));
                 }
                 phase= distribution(generator);
                 kk = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
 
                 if( abs(kk-kf) < dk){
-                        psi_hat(i,Ny-j-1) = Amp*complex<double>(cos(phase),sin(phase));
+                        psi_hat(i,Ny-j-1) = force_amplitude*complex<double>(cos(phase),sin(phase));
                 }
                    phase= distribution(generator);
                 kk = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
 
                 if( abs(kk-kf) < dk){
-                        psi_hat(Nx-i-1,Ny-j-1) = Amp*complex<double>(cos(phase),sin(phase));
+                        psi_hat(Nx-i-1,Ny-j-1) = force_amplitude*complex<double>(cos(phase),sin(phase));
                 }
         }
 }
@@ -91,13 +92,38 @@ for(int j =0; j < Ny/2; j++){
 fftw_execute(IFFT);
 
 }
-else{
+else if (FLAG_INITIAL_TYPE == "log-exp"){
+       
+    
+    for(int j = 0; j < Ny/2; j++){
+        for(int i = 0; i < Nx/2; i++){
+    
+            kk = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
+            phase = distribution(generator);
+            psi_hat(i,j) = force_amplitude * exp(-0.5*pow(log(kk/kf)/sigmaf,2.0)) * complex<double>(cos(phase),sin(phase));
+             
+    
+            kk = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
+            phase = distribution(generator);
+            psi_hat(Nx-i-1,j) =  force_amplitude * exp(-0.5*pow(log(kk/kf)/sigmaf,2.0))*complex<double>(cos(phase),sin(phase));
+           
+            kk = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
+            phase = distribution(generator);
+            psi_hat(i,Ny-j-1) = force_amplitude *  exp(-0.5*pow(log(kk/kf)/sigmaf,2.0))*complex<double>(cos(phase),sin(phase));
+             
+    
+            kk = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
+            phase = distribution(generator);
+            psi_hat(Nx-i-1,Ny-j-1) =  force_amplitude * exp(-0.5*pow(log(kk/kf)/sigmaf,2.0))*complex<double>(cos(phase),sin(phase));
+                   
+    
+        }
+    }
 
-
-
-
-
-
+    fftw_execute(IFFT);
+}
+    
+else if (FLAG_INITIAL_TYPE == "inprint"){
 
  
    //pade approximate at 4th order by caliari and zuccher 2016
@@ -120,8 +146,6 @@ else{
     double ydiff = 0.0;
     int m;
   
-
-
 rowvec position_x(N_vortices,fill::zeros), position_y(N_vortices,fill::zeros), circulation(N_vortices,fill::zeros);
 
 
@@ -197,6 +221,12 @@ else{
         }
     }
 }
+else{
+    cout << "FLAG_FORCING_TYPE not defined" << endl;
+    exit(1);
+}
+
+
     ofstream fout("./psi.initial");				//open up file
 	fout.precision(12);
     for(int i=0; i < Nx; i++){

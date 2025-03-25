@@ -1,9 +1,9 @@
 OBJS = initial.o
 #this is for linux machines
-CC = g++ -Wall -O3 -std=c++14 -fopenmp
-DEBUG = 
-CFLAGS = -c $(DEBUG) -I/usr/local/include/
-LFLAGS = $(DEBUG) -lfftw3 -lfftw3_threads -larmadillo -L/usr/local/lib/ -lm -lpthread
+#CC = g++ -Wall -O3 -std=c++14 -fopenmp
+#DEBUG = 
+#CFLAGS = -c $(DEBUG) -I/usr/local/include/
+#LFLAGS = $(DEBUG) -lfftw3 -lfftw3_threads -larmadillo -L/usr/local/lib/ -lm -lpthread
 
 #this is for aston math cluster
 #CC = g++ -Wall -O3 -std=c++14 -fopenmp
@@ -13,10 +13,10 @@ LFLAGS = $(DEBUG) -lfftw3 -lfftw3_threads -larmadillo -L/usr/local/lib/ -lm -lpt
 
 
 #The following is for mac os x
-#CC = g++-mp-10 -Wall -O3 -std=c++14 -fopenmp
-#DEBUG = 
-#CFLAGS = -c $(DEBUG) -I/opt/local/include
-#LFLAGS = $(DEBUG) -L/opt/local/lib -framework Accelerate -march=native -lfftw3 -lfftw3_threads -lopenblas -lm -lpthread -larmadillo
+CC = g++-mp-14 -Wall -O3 -std=c++14 -fopenmp
+DEBUG = 
+CFLAGS = -c $(DEBUG) -I/opt/local/include
+LFLAGS = $(DEBUG) -L/opt/local/lib -framework Accelerate -march=native -lfftw3 -lfftw3_threads -lopenblas -lm -lpthread -larmadillo
 
 
 
