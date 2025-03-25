@@ -27,7 +27,7 @@ const double dipole_distance = pi/8.0;  // original distance pi/4.0;
 const double dk = 2.0;
 const double kf = 16.0;
 const double sigmaf = 0.05;
-const double force_amplitude = 0.015;
+const double force_amplitude = 0.15;
 const std::string FLAG_INITIAL_TYPE = "log-exp"; // "annulus", "log-exp", "inprint"
 const bool FLAG_READ_IN_FROM_FILE = 0;
 
