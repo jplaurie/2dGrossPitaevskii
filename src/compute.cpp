@@ -88,7 +88,7 @@ void computeEnergy(cx_mat psi_hat, cx_mat psi, double & linear_energy_out, doubl
     return;
 }
 
-void computeWaveaction(cx_mat psi, double & waveaction_out){
+void computeWaveaction(cx_mat psi_hat, double & waveaction_out){
    /*
     Subroutine that computes the total waveaction
    */
@@ -96,7 +96,7 @@ void computeWaveaction(cx_mat psi, double & waveaction_out){
 
         for(int j = 0; j < Ny; j++){
             for(int i = 0; i < Nx; i++){
-                waveaction_out +=  dx * dy * pow(abs(psi(i,j)),2.0);
+                waveaction_out +=  Lx * Ly * pow(abs(psi_hat(i,j)),2.0);
             }
         }
 return;
