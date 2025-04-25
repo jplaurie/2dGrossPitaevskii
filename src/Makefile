@@ -6,7 +6,7 @@ OBJS = main.o linear.o nonlinear.o read.o compute.o forcing.o print.o
 
 
 #The following is for mac os x
-CC = g++-mp-14 -O3 -std=c++14 -fopenmp
+CC = g++-mp-14 -O3 -std=c++23 -fopenmp
 DEBUG = -Wall 
 CFLAGS = -c $(DEBUG) -I/opt/local/include
 LFLAGS = $(DEBUG) -L/opt/local/lib -framework Accelerate -march=native -lfftw3 -lfftw3_threads -lopenblas -lm -lpthread -larmadillo
