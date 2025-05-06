@@ -28,7 +28,7 @@ $\alpha$ : hypo-viscosity coefficient
 $q$ : power of hypo-viscosity ($q\geq0$)  
 $F$ : additive forcing
 
-### 🚀 Libraries
+### Libraries
 
 The code uses the following libraries that will need to be installed by the user
 
@@ -37,7 +37,7 @@ The code uses the following libraries that will need to be installed by the user
 • armadillo (C++ linear algebra library)  
 • openBLAS (linear algebra library that is used by armadillo)  
 
-All of the above can be installed via the local repositories on Linux, or via Macports (and possibly Homebrew) on
+All of the above can be installed via the local repositories on Linux, or via macports (and possibly Homebrew) on
 macOS.
 
 ## How to Run the Code
@@ -62,7 +62,7 @@ The folder ./data/ will also contain all the data for the wave function $\psi$. 
 /data/psi.XXXXXX where XXXXXX is the file number padded by zeros. Files /data/psi.XXXXXX are core data for
 the numerical code:
 
-| $z$ | $Re(ψ)$ | $Im(ψ)$ |
+| $z$ | $Re(\psi)$ | $Im(\psi)$ |
 |:---:|:-------:|:-------:|
 | .|. |. |
 | .|. |. |
