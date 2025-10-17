@@ -85,10 +85,21 @@ fout_data << "Nx = " << Nx << " Ny = " << Ny << endl;
 fout_data << "Lx = " << Lx << " Ly = " << Ly << endl; 
 fout_data << "c = " << c << " g = " << g << " mu = " << mu << endl;
 fout_data <<"================ Dissipation =====================" << endl;
-fout_data << "nupower = " << nupower << " nu = " << nu << endl;
-fout_data << "alphapower = " << alphapower << " alpha = " << alpha << endl;
-fout_data << "FLAG_GINZBURG_LANDAU_DISS = " << FLAG_GINZBURG_LANDAU_DISS << endl;
-fout_data << "Ginzburg dissipation gamma = " << gamma_0 << endl;
+if(FLAG_HYPER_DISSIPATION == true){
+	fout_data << "nupower = " << nupower << " nu = " << nu << endl;
+}
+if(FLAG_HYPER_CUTOFF == true){
+	fout_data << "nucutoff = " << nucutoff << endl;
+}
+if(FLAG_HYPO_DISSIPATION == true){
+	fout_data << "alphapower = " << alphapower << " alpha = " << alpha << endl;
+}
+if(FLAG_HYPO_CUTOFF == true){
+	fout_data << "alphacutoff = " << alphacutoff << endl;
+}
+if(FLAG_GINZBURG_LANDAU_DISS == true){
+	fout_data << "Ginzburg dissipation gamma = " << gamma_0 << endl;
+}
 fout_data <<"================ Timestepping =========================" << endl;
 fout_data << "FLAG_TIMESTEP_METHOD = " << FLAG_TIMESTEP_METHOD << endl;
 fout_data << "dt = " << dt << endl;
@@ -104,9 +115,13 @@ else if(FLAG_FORCING_TYPE == "gaussian"){
 	fout_data << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
 	fout_data << "force_amplitude = " << force_amplitude << " kf = " << kf << " sigmaf = " << sigmaf << endl;
 }
-if(FLAG_FORCING_TYPE == "exponential"){
+else if(FLAG_FORCING_TYPE == "exponential"){
 	fout_data << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
 	fout_data << "force_amplitude = " << force_amplitude << " kf = " << kf << " force_power = " << force_power << endl;
+}
+else if(FLAG_FORCING_TYPE == "exp-log"){
+	fout_data << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
+	fout_data << "force_amplitude = " << force_amplitude << " kf = " << kf << " sigmaf = " << sigmaf << endl;
 }
 if(FLAG_SOUND_FILTER == true){
 	fout_data <<"================ Sound Filter ====================" << endl;
@@ -119,10 +134,21 @@ cout << "Nx = " << Nx << " Ny = " << Ny << endl;
 cout << "Lx = " << Lx << " Ly = " << Ly << endl; 
 cout << "c = " << c << " g = " << g << " mu = " << mu << endl;
 cout <<"================ Dissipation =====================" << endl;
-cout << "nupower = " << nupower << " nu = " << nu << endl;
-cout << "alphapower = " << alphapower << " alpha = " << alpha << endl;
-cout << "FLAG_GINZBURG_LANDAU_DISS = " << FLAG_GINZBURG_LANDAU_DISS << endl;
-cout << "Ginzburg dissipation gamma = " << gamma_0 << endl;
+if(FLAG_HYPER_DISSIPATION == true){
+	cout << "nupower = " << nupower << " nu = " << nu << endl;
+}
+if(FLAG_HYPER_CUTOFF == true){
+	cout << "nucutoff = " << nucutoff << endl;
+}
+if(FLAG_HYPO_DISSIPATION == true){
+	cout << "alphapower = " << alphapower << " alpha = " << alpha << endl;
+}
+if(FLAG_HYPO_CUTOFF == true){
+	cout << "alphacutoff = " << alphacutoff << endl;
+}
+if(FLAG_GINZBURG_LANDAU_DISS == true){
+	cout << "Ginzburg dissipation gamma = " << gamma_0 << endl;
+}
 cout <<"================ Timestepping =========================" << endl;
 cout << "FLAG_TIMESTEP_METHOD = " << FLAG_TIMESTEP_METHOD << endl;
 cout << "dt = " << dt << endl;
@@ -138,9 +164,13 @@ else if(FLAG_FORCING_TYPE == "gaussian"){
 	cout << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
 	cout << "force_amplitude = " << force_amplitude << " kf = " << kf << " sigmaf = " << sigmaf << endl;
 }
-if(FLAG_FORCING_TYPE == "exponential"){
+else if(FLAG_FORCING_TYPE == "exponential"){
 	cout << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
 	cout << "force_amplitude = " << force_amplitude << " kf = " << kf << " force_power = " << force_power << endl;
+}
+else if(FLAG_FORCING_TYPE == "exp-log"){
+	cout << "FLAG_FORCING_RESCALE = " << FLAG_FORCING_RESCALE << endl;
+	cout << "force_amplitude = " << force_amplitude << " kf = " << kf << " sigmaf = " << sigmaf << endl;
 }
 if(FLAG_SOUND_FILTER == true){
 	cout <<"================ Sound Filter ====================" << endl;
