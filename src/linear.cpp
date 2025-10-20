@@ -88,31 +88,31 @@ for(int j= 0; j < Ny/2; j++){
             
             k = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
             if( k < alphacutoff){
-		        L(i,j) += complex<double>( - alpha*pow(k,2.0 * alphapower),0.0);
+		          L(i,j) += complex<double>( - alpha*pow(k,2.0 * alphapower),0.0);
             }
             
             k = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(j)/ Ly,2.0) , 0.5);
             if( k < alphacutoff){
-		        L(Nx-i-1,j) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
+		          L(Nx-i-1,j) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
             }
             
             k = pow( pow(   2.0*pi * double(i)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
             if( k < alphacutoff){
-		        L(i,Ny-j-1) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
+		          L(i,Ny-j-1) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
             }
             
             k = pow( pow(   2.0*pi * double(-i-1)/ Lx,2.0)  + pow(   2.0*pi * double(-j-1)/ Ly,2.0) , 0.5);
             if( k < alphacutoff){
-		        L(Nx-i-1,Ny-j-1) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
+		          L(Nx-i-1,Ny-j-1) += complex<double>( - alpha*pow(k, 2.0 * alphapower),0.0);
             }
 	
             
         }
         else{
             L(i,j) += complex<double>( - alpha*pow(pow((2.0 * pi * double(i) / Lx),2.0) +pow((2.0 * pi * double(j) / Ly),2.0),alphapower),0.0);
-		    L(Nx-i-1,j) += complex<double>( - alpha*pow(pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(j) / Ly),2.0),alphapower),0.0);
-		    L(i,Ny-j-1) += complex<double>( - alpha*pow(pow((2.0 * pi * double(i) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0),alphapower),0.0);
-		    L(Nx-i-1,Ny-j-1) += complex<double>( - alpha*pow(pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0),alphapower),0.0);
+    		    L(Nx-i-1,j) += complex<double>( - alpha*pow(pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(j) / Ly),2.0),alphapower),0.0);
+		        L(i,Ny-j-1) += complex<double>( - alpha*pow(pow((2.0 * pi * double(i) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0),alphapower),0.0);
+		        L(Nx-i-1,Ny-j-1) += complex<double>( - alpha*pow(pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0),alphapower),0.0);
         }
     }
 }

@@ -121,48 +121,48 @@ void computeDissipationRate( cx_mat psi_hat, double & waveaction_dissipation_rat
             psi_hat2 = pow( abs(psi_hat(i,j)),2.0);
         
             if(FLAG_HYPER_DISSIPATION == true){
-                energy_dissipation_rate_nu -= 2.0* c *nu*pow(k2,nupower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_nu += 2.0*nu*pow(k2,nupower) * psi_hat2 ;
+                energy_dissipation_rate_nu -= 2.0 * c * nu * pow(k2,nupower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_nu += 2.0 * nu * pow(k2,nupower) * psi_hat2 ;
             }
             if(FLAG_HYPO_DISSIPATION == true && (i != 0 || j != 0)){
-                energy_dissipation_rate_alpha -= 2.0* c *alpha*pow(k2,alphapower+1.0) * psi_hat2;          
-                waveaction_dissipation_rate_alpha += 2.0*alpha*pow(k2,alphapower) * psi_hat2 ;
+                energy_dissipation_rate_alpha -= 2.0 * c * alpha * pow(k2,alphapower+1.0) * psi_hat2;          
+                waveaction_dissipation_rate_alpha += 2.0 * alpha * pow(k2,alphapower) * psi_hat2 ;
             }
 
             k2 =   pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(j) / Ly),2.0)  ;
             psi_hat2 = pow( abs(psi_hat(Nx-i-1,j)),2.0);
           
             if(FLAG_HYPER_DISSIPATION == true){
-                energy_dissipation_rate_alpha -= 2.0* c *alpha*pow(k2,alphapower+1.0) * psi_hat2;          
-                waveaction_dissipation_rate_alpha += 2.0*alpha*pow(k2,alphapower) * psi_hat2 ;
+                energy_dissipation_rate_nu -= 2.0 * c * nu * pow(k2,nupower+1.0) * psi_hat2;          
+                waveaction_dissipation_rate_nu += 2.0 * nu * pow(k2,nupower) * psi_hat2 ;
             }    
             if(FLAG_HYPO_DISSIPATION == true){
-                energy_dissipation_rate_alpha -= 2.0* c *alpha*pow(k2,alphapower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_alpha += 2.0*alpha*pow(k2,alphapower) * psi_hat2 ;
+                energy_dissipation_rate_alpha -= 2.0 * c * alpha*pow(k2,alphapower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_alpha += 2.0 * alpha*pow(k2,alphapower) * psi_hat2 ;
             }
 
             k2 = pow((2.0 * pi * double(i) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0)  ;
             psi_hat2 = pow( abs(psi_hat(i,Ny-j-1)),2.0);
          
             if(FLAG_HYPER_DISSIPATION == true){
-                energy_dissipation_rate_nu -= 2.0* c *nu*pow(k2,nupower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_nu += 2.0*nu*pow(k2,nupower) * psi_hat2 ;
+                energy_dissipation_rate_nu -= 2.0 * c * nu * pow(k2,nupower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_nu += 2.0 * nu * pow(k2,nupower) * psi_hat2 ;
             }
             if(FLAG_HYPO_DISSIPATION == true){
-                energy_dissipation_rate_alpha -= 2.0* c *alpha*pow(k2,alphapower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_alpha += 2.0*alpha*pow(k2,alphapower) * psi_hat2 ;
+                energy_dissipation_rate_alpha -= 2.0 * c * alpha * pow(k2,alphapower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_alpha += 2.0 * alpha * pow(k2,alphapower) * psi_hat2 ;
             }
 
             k2 =  pow((2.0 * pi * double(-i-1) / Lx),2.0) +pow((2.0 * pi * double(-j-1) / Ly),2.0)  ;
             psi_hat2 = pow( abs(psi_hat(Nx-i-1,Ny-j-1)),2.0);
  
             if(FLAG_HYPER_DISSIPATION == true){
-                energy_dissipation_rate_nu -= 2.0* c *nu*pow(k2,nupower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_nu += 2.0*nu*pow(k2,nupower) * psi_hat2 ;
+                energy_dissipation_rate_nu -= 2.0 * c * nu * pow(k2,nupower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_nu += 2.0 * nu * pow(k2,nupower) * psi_hat2 ;
             }
             if(FLAG_HYPO_DISSIPATION == true){
-                energy_dissipation_rate_alpha -= 2.0* c *alpha*pow(k2,alphapower+1.0) * psi_hat2;
-                waveaction_dissipation_rate_alpha += 2.0*alpha*pow(k2,alphapower) * psi_hat2 ;
+                energy_dissipation_rate_alpha -= 2.0 * c * alpha * pow(k2,alphapower+1.0) * psi_hat2;
+                waveaction_dissipation_rate_alpha += 2.0 * alpha * pow(k2,alphapower) * psi_hat2 ;
             }
         }   
     }

@@ -1,15 +1,15 @@
 OBJS = main.o linear.o nonlinear.o read.o compute.o forcing.o print.o
 #this is for linux machines
-#CC = g++ -Wall -O3 -std=c++14 -fopenmp
-#CFLAGS = -c -I/usr/local/include
-#LFLAGS = -lfftw3 -lfftw3_threads -lopenblas -L/usr/local/lib -lm -lpthread -llapack -larmadillo
+CC = g++ -Wall -O3 -std=c++23 -fopenmp
+CFLAGS = -c -I/usr/local/include
+LFLAGS = -lfftw3 -lfftw3_threads -lopenblas -L/usr/local/lib -lm -lpthread -llapack -larmadillo
 
 
 #The following is for mac os x
-CC = g++-mp-14 -O3 -std=c++23 -fopenmp
-DEBUG = -Wall 
-CFLAGS = -c $(DEBUG) -I/opt/local/include
-LFLAGS = $(DEBUG) -L/opt/local/lib -framework Accelerate -march=native -lfftw3 -lfftw3_threads -lopenblas -lm -lpthread -larmadillo
+#CC = g++-mp-14 -O3 -std=c++23 -fopenmp
+#DEBUG = -Wall 
+#CFLAGS = -c $(DEBUG) -I/opt/local/include
+#LFLAGS = $(DEBUG) -L/opt/local/lib -framework Accelerate -march=native -lfftw3 -lfftw3_threads -lopenblas -lm -lpthread -larmadillo
 
 
 
