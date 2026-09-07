@@ -1,0 +1,39 @@
+# Production-scale parameter example.
+nx 512
+ny 512
+aspectRatio 1
+timeStep 1e-5
+numberOfSteps 9999999999
+outputIntervalSteps 100
+
+integrator etd4
+dispersionCoefficient -1
+nonlinearityCoefficient 1000
+chemicalPotential 0
+
+hyperviscosity 1e-36
+hyperviscosityOrder 8
+hyperviscosityCutoffEnabled false
+hyperviscosityCutoff 1024
+hypoviscosity 5000
+hypoviscosityOrder -2
+hypoviscosityCutoffEnabled false
+hypoviscosityCutoff 4
+ginzburgLandauDamping 0
+ginzburgLandauCutoff 0.5
+
+forcingEnabled true
+forcingProfile logNormal
+forcingWavenumber 32
+forcingWidth 2
+forcingAmplitude 0.1
+forcingShapeOrder 4
+forcingLogWidth 0.05
+targetWaveActionInjectionRate 0
+randomSeed 0
+
+writeModeDiagnostics false
+threadCount 0
+overwriteOutput false
+dataDirectory data
+outputDirectory output

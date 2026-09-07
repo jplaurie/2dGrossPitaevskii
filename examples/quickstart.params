@@ -1,0 +1,34 @@
+# Small reproducible installation and backend-comparison run.
+nx 32
+ny 32
+aspectRatio 1
+timeStep 0.0001
+numberOfSteps 10
+outputIntervalSteps 5
+
+integrator etd4
+dispersionCoefficient -1
+nonlinearityCoefficient 10
+chemicalPotential 0
+hyperviscosity 1e-5
+hyperviscosityOrder 2
+hyperviscosityCutoffEnabled false
+hypoviscosity 0
+hypoviscosityOrder 0
+ginzburgLandauDamping 0
+
+forcingEnabled true
+forcingProfile annulus
+forcingWavenumber 6
+forcingWidth 0.75
+forcingAmplitude 0.02
+forcingShapeOrder 4
+forcingLogWidth 0.1
+targetWaveActionInjectionRate 0
+randomSeed 123456
+
+writeModeDiagnostics true
+threadCount 1
+overwriteOutput false
+dataDirectory data/quickstart
+outputDirectory output/quickstart

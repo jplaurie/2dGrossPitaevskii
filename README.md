@@ -1,124 +1,228 @@
+# 2D Gross–Pitaevskii pseudo-spectral solver
 
-<a name="top"></a>
+A C++20 solver for a complex Gross–Pitaevskii field on a doubly periodic
+domain. A shared numerical model is available through OpenMP, hybrid
+MPI/OpenMP, and CUDA backends.
 
-![OS](https://img.shields.io/badge/OS-linux%2C%20macOS-0078D4) 
-![language](https://img.shields.io/badge/Language-C%2B%2B-yellow?)
+Three executables share one model, parameter format, set of time integrators,
+and output format:
 
-## Table of Contents
-- [About](#about)
-- [How to Run the Code](#how-to-run-the-code)
+| Executable | Backend | Use case |
+| --- | --- | --- |
+| `gross_pitaevskii_cpu` | FFTW, with optional OpenMP | Shared-memory runs |
+| `gross_pitaevskii_mpi` | FFTW-MPI, with optional OpenMP | Distributed-memory runs |
+| `gross_pitaevskii_cuda` | CUDA and cuFFT | NVIDIA GPU runs |
 
-## About
+The solver provides dealiased pseudo-spectral nonlinear evaluation, four
+fixed-step exponential or integrating-factor schemes, reproducible stochastic
+forcing, atomic checkpoints, automatic restart, and cross-backend regression
+tests.
 
-This repository contains the numerical code for solving the two-dimensional Gross-Pitaevskii equation for the complex wave function $\psi(\mathbf{x},t)$ in periodic boundary conditions of length $[0,L_x)\times[0,L_y)$. The code solves the equation: 
+## Equation and discretization
 
-```math
-i\frac{\partial \psi}{\partial t}=-c\nabla^2\psi - \frac{\mu}{2}\psi +\frac{g}{2}|\psi|^2\psi - i\nu(-\nabla^2)^p \psi - i\alpha(-\nabla^2)^{-q} \psi+F,
-```
-
-using a pseudo-spectral discretisation method, fully dealiased using the 3/2-rule. Time stepping is performed using the fourth-order exponential time differencing Runge-Kutta method.
-
-### Parameters 
-$c$ : speed of sound  
-$\mu$ : chemical potential  
-$g$ : nonlinearity parameter  
-$\nu$ : hyper-viscosity coefficient  
-$p$ : power of hyper-viscosity ($p>0$)  
-$\alpha$ : hypo-viscosity coefficient  
-$q$ : power of hypo-viscosity ($q\geq0$)  
-$F$ : additive forcing
-
-### Libraries
-
-The code uses the following libraries that will need to be installed by the user
-
-• gcc (compiler)  
-• ﬀtw-3 (fast Fourier transform library)  
-• armadillo (C++ linear algebra library)  
-• openBLAS (linear algebra library that is used by armadillo)  
-
-All of the above can be installed via the local repositories on Linux, or via macports (and possibly Homebrew) on
-macOS.
-
-## How to Run the Code
-
-The numerical code contains a */src/Makefile* that will compile the code using the gcc compiler and create an executable /src/gp2d. At the very top are paths to the default locations of the linked libraries for both Linux and MacOS. Simply comment out the one not in use. Bear in mind that the location of the libraries may diﬀer on your local machine.
-All global parameters are stored in the header file /src/const.h. Any changes in /src/const.h will require a recompilation of the numerical code before running. Once /src/gp2d is created, it can be moved to any directory one wishes, but the /data/ folder must be present
-in the running directory.
-
-
-### The /data/ Folder
-To run the code, the user must create a /src/data/ directory in the same folder as the created executable. In
-the /data/ folder the user must create a file called /data/curframe.dat that will contain two numbers separated by
-a tab. The numbers represent the current time and the label of the last generated file number. Each time the code
-outputs a new file for the data, /data/curframe.dat will be automatically updated with the new time and label of
-the last data file. The code uses this information to when restarting from the last generated file.
-
-| current time | file number |
-|:------------:|:-----------:|
-|       z      |    XXXXXX   |
-
-The folder ./data/ will also contain all the data for the wave function $\psi$. They are stored in files called
-/data/psi.XXXXXX where XXXXXX is the file number padded by zeros. Files /data/psi.XXXXXX are core data for
-the numerical code:
-
-| $z$ | $Re(\psi)$ | $Im(\psi)$ |
-|:---:|:-------:|:-------:|
-| .|. |. |
-| .|. |. |
-| .|. |. |
-
-### The ./output/ Folder
-The code will automatically generate (if not already present) another folder called ./output/ that will contain all
-necessary in-code post-processing of the data. Usually, this includes the data used for debugging and verification.
-The code will output files at the same intervals as the main data /data/psi.XXXXXX. /output/energy.XXXXXX records the Hamiltonian or energy of the equation to ensure that it is properly conserved by the dynamics.
+The solver evolves normalized Fourier coefficients of the complex field
+`psi` on `Lx = 2*pi*aspectRatio`, `Ly = 2*pi`:
 
 ```math
-H = H_{lin} + H_{pot} + H_{non}= \int c\left| \nabla \psi \right|^2 - \frac{\mu}{2} |\psi|^2 + \frac{g}{4}|\psi|^4 d{\bf x}.
+\partial_t\psi_k =
+\frac{(-c|k|^2+\mu)\psi_k+g\,\widehat{|\psi|^2\psi}_k}
+     {i-\Gamma_k}
+-\left[\nu |k|^{2p}+\alpha |k|^{2q}\right]\psi_k+F_k.
 ```
 
- It is recorded in the form of a row of four numbers:
+Here `c`, `g`, and `mu` are `dispersionCoefficient`,
+`nonlinearityCoefficient`, and `chemicalPotential`. The optional
+Ginzburg–Landau coefficient `Gamma_k` is applied above its configured cutoff.
+Hyper- and hypoviscosity can each optionally be limited to one side of a
+wavenumber cutoff.
 
-| current time | linear energy | potential energy | nonlinear energy |
-|:---:|:-------:|:-------:|:---:|
-| $z$ |  $H_{lin}$ |  $H_{pot}$ | $H_{non}$ |
+The cubic term uses a two-pass 3/2-rule treatment:
+`psi` is embedded on the padded grid, `psi^2` is transformed and truncated to
+the retained band, and that filtered product is multiplied by `conj(psi)`
+before the final transform. This is important for a cubic nonlinearity and
+provides a momentum-conserving discretization.
 
+Fixed-step integrators are ETDRK2 (`etd2`), ETDRK3 (`etd3`), ETDRK4-B
+(`etd4`), and second-order integrating-factor Runge–Kutta (`rk2`). The full
+linear operator is integrated analytically. Stochastic forcing uses the exact
+linear covariance over one step, and its generator state is checkpointed.
 
-/output/wave.XXXXXX records the wave action of the equation to ensure that it is properly conserved by the dynamics:
+## Requirements
 
-```math
-N = \int  |\psi|^2 d{\bf x}.
+The CPU build requires CMake 3.20+, a C++20 compiler, and FFTW3 development
+headers and libraries. OpenMP and FFTW's threads library are optional. The
+hybrid executable also needs MPI and FFTW-MPI. The CUDA executable needs the
+NVIDIA CUDA Toolkit and cuFFT, plus an NVIDIA GPU at run time. Python 3 enables
+the end-to-end regression tests.
+
+For example, the required packages can be installed on Arch Linux with:
+
+```bash
+sudo pacman -S cmake gcc fftw openmpi fftw-openmpi cuda python
 ```
 
-It is recorded in the form:
+## Build and test
 
-| current time |  total wave action | zeroth mode of wave action | 
-|:-:|:-:|:-:|
-| $z$ |  $N$  | ${\rm abs}\left(\hat{\psi}_{k=0}\right)^2$ | 
+Start with a portable CPU build:
 
+```bash
+cmake -S . -B build/cpu -DCMAKE_BUILD_TYPE=Release \
+  -DGP2D_MPI=OFF -DGP2D_CUDA=OFF
+cmake --build build/cpu -j
+ctest --test-dir build/cpu --output-on-failure
+```
 
-/output/spec.XXXXXX records the Fourier wave action spectrum of $|\hat{\psi}_{k}|^2$ and wave energy spectrum $k^2\left|\hat{\psi}_{k}\right|^2$ verses $k$. It is recorded in the form of five columns of numbers:
+To build every backend supported by the local toolchain and enable the MPI and
+CUDA regression tests:
 
-| $k$ | $abs\left(\hat{\psi}_k\right)^2$ | $c k^2 abs\left(\hat{\psi}_k\right)^2$ | $\langle abs\left(\hat{\psi}_k\right)^2\rangle$ | $\langle ck^2 abs\left(\hat{\psi}_k\right)^2\rangle$ |
-|:-:|:-:|:-:|:-:|:-:|
-| . | . | . | . | . |
+```bash
+cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
+  -DGP2D_BACKEND_TESTS=ON
+cmake --build build/release -j
+ctest --test-dir build/release --output-on-failure
+```
 
-/output/flux.XXXXXX records spectral Fourier flux vs k for both the wave action and energy (instantaneous as
-well as time averaged over data since start of code). It is recorded in the form of five columns:
+CMake omits MPI if MPI or FFTW-MPI is unavailable and omits CUDA if no CUDA
+compiler is found. Useful options are:
 
+```text
+-DGP2D_OPENMP=OFF
+-DGP2D_MPI=OFF
+-DGP2D_CUDA=OFF
+-DGP2D_CUDA_ARCHITECTURES=<CUDA architecture>
+-DGP2D_BACKEND_TESTS=ON
+```
 
-| $k$ | wave action flux $\eta_k$ |  energy flux $\epsilon_k$ | $\langle \eta_k\rangle$ | $\langle \epsilon_k\rangle$ | 
-|:-:|:-:|:-:|:-:|:-:|
-| . | . | . | . | . | 
+Backend tests are opt-in because they require a working MPI launcher and, for
+CUDA, a visible GPU. Convenience targets are `make cpu`, `make mpi`,
+`make cuda`, and `make test`; set `BUILD_DIR` if desired.
 
-/output/dis.XXXXXX records the total wave action and energy dissipated via the terms that constitute D at the time of output. It is recorded in the form of five columns:
+## Quick start
 
-| current time | wave action dissipated by hypoviscosity |  wave action dissipated by hyperviscosity |  linear energy dissipated by hypoviscosity |  energy dissipated by hyperviscosity |
-|:-:|:-:|:-:|:-:|:-:|
-| . | . | . | . | . | 
+[`examples/quickstart.params`](examples/quickstart.params) is a small,
+repeatable forced run:
 
-Using terminal command cat energy.* > energy.tot will append all individual output files into one single file for plotting.
+```bash
+./build/cpu/gross_pitaevskii_cpu examples/quickstart.params
+```
 
+It writes snapshots and checkpoints under `data/quickstart/` and CSV
+diagnostics under `output/quickstart/`. Remove those directories or change the
+paths before starting a fresh run.
 
-### The ./initial/ Folder
-As probably surmised, the code initializes from the data file /data/psi.XXXXXX stored in /data/ to which the file number in /data/curframe.dat points. Therefore, to initialise the code when not restarting one needs to include an initial data file, normally /src/data/psi.000000 (it requires for /data/curframe.dat to be set to 0 0). If you require a zero-state initial condition because you are running a forced/dissipated simulation, you can set XXXXXX in /data/curframe.dat to be any negative integer and the code will interpret this as you wanting to create a zero-state initial condition and will generate this automatically. If you want to generate a custom (bespoke) initial condition, then next to the /src/ folder is the /initial/ folder that contains a simple .cpp file for generating a custom initial state that can be copied into /data/.
+All executables accept an optional parameter-file path and otherwise read
+`params.txt`:
+
+```bash
+./build/release/gross_pitaevskii_cpu run.params
+
+mpirun -n 2 ./build/release/gross_pitaevskii_mpi run.params
+
+./build/release/gross_pitaevskii_cuda run.params
+```
+
+`threadCount` selects OpenMP and threaded-FFTW threads per process; zero uses
+the OpenMP runtime default, including `OMP_NUM_THREADS` when it is set. For
+MPI, plan for `ranks * threadCount` CPU cores. Only rank zero writes files.
+CUDA keeps time-integration stages and nonlinear FFTs on the device; host
+transfers occur for stochastic increments and output.
+
+## Parameter files
+
+Each nonempty line is `key value` or `key = value`; `#` begins a comment. Keys
+are case-sensitive, and invalid keys, values, or extra fields stop the run.
+
+| Key | Purpose |
+| --- | --- |
+| `nx`, `ny` | Even physical-grid dimensions, each at least four |
+| `aspectRatio` | Positive `Lx/(2*pi)` |
+| `timeStep`, `numberOfSteps` | Fixed step and additional steps this invocation |
+| `outputIntervalSteps` | Save cadence; the final step is always saved |
+| `integrator` | `etd2`, `etd3`, `etd4`, or `rk2` |
+| `dispersionCoefficient` | `c` in the equation |
+| `nonlinearityCoefficient` | Cubic coefficient `g` |
+| `chemicalPotential` | Linear coefficient `mu` |
+| `hyperviscosity`, `hyperviscosityOrder` | `nu` and positive-scale spectral power `p` |
+| `hyperviscosityCutoffEnabled`, `hyperviscosityCutoff` | Apply hyperviscosity only above the cutoff |
+| `hypoviscosity`, `hypoviscosityOrder` | `alpha` and spectral power `q` (negative is allowed) |
+| `hypoviscosityCutoffEnabled`, `hypoviscosityCutoff` | Apply hypoviscosity only below the cutoff |
+| `ginzburgLandauDamping`, `ginzburgLandauCutoff` | `Gamma_k` strength and lower wavenumber threshold |
+| `forcingEnabled` | Enable or disable forcing |
+| `forcingProfile` | `annulus`, `gaussian`, `exponential`, `logNormal`, or `singleMode` |
+| `forcingWavenumber` | Profile center; an integer Fourier-mode index for `singleMode` |
+| `forcingWidth` | Annulus half-width or Gaussian standard deviation |
+| `forcingAmplitude` | Spectral forcing amplitude |
+| `forcingShapeOrder` | Exponent for `exponential` forcing |
+| `forcingLogWidth` | Log-space sigma for `logNormal` forcing |
+| `targetWaveActionInjectionRate` | Normalize stochastic forcing when positive |
+| `randomSeed` | Reproducible 64-bit seed; zero chooses and records a time-based seed |
+| `writeModeDiagnostics` | Write selected complex Fourier modes |
+| `threadCount` | Host threads per process; zero uses the runtime default |
+| `overwriteOutput` | Permit frame replacement; it does not disable restart detection |
+| `initialConditionFile` | Optional physical complex field |
+| `dataDirectory`, `outputDirectory` | State and diagnostic locations |
+
+Booleans accept `true`/`false` or `1`/`0`. `singleMode` is deterministic at
+the four modes with `|kx index| = |ky index| = forcingWavenumber`; the other
+profiles use circular complex Gaussian, white-in-time forcing.
+Forcing-specific numeric constraints are checked only when `forcingEnabled` is
+true; disabled forcing parameters are parsed but otherwise ignored.
+For negative `hypoviscosityOrder`, the hypoviscous multiplier is singular at
+`k=0`. The mean mode is therefore explicitly set to zero on initialization and
+after every time step.
+
+An initial-condition file contains `2*nx*ny` whitespace-delimited numbers,
+ordered as row-major `real imag` pairs. A `wavefunction_NNNNNNNN.dat` snapshot
+has this format and can be used directly as an initial condition. Relative
+paths are resolved from the directory in which the executable is launched.
+
+## Output and restart
+
+Fresh runs save frame zero, then the requested cadence and final step.
+
+| Location | Contents |
+| --- | --- |
+| `dataDirectory/wavefunction_NNNNNNNN.dat` | Physical `real imag` pairs (`ny` by `2*nx`) |
+| `dataDirectory/checkpoint_NNNNNNNN.bin` | Normalized complex spectral state |
+| `dataDirectory/restart_state.txt` | Latest time, frame, grid identity, and RNG state |
+| `outputDirectory/diagnostics.csv` | Hamiltonian components, wave action, and damping rates |
+| `outputDirectory/spectra.csv` | Wave-action and quadratic-energy shell spectra |
+| `outputDirectory/fluxes.csv` | Corresponding nonlinear spectral transfers |
+| `outputDirectory/modes.csv` | Optional selected complex Fourier modes |
+| `outputDirectory/forcing_*.csv` | Forcing summary and spectrum |
+| `outputDirectory/segments/` | Per-invocation resolved parameters and forcing records |
+
+Here `quadratic_energy` means the kinetic-plus-chemical-potential part,
+`area * sum_k (-c*|k|^2 + mu)*|psi_k|^2`. The diagnostics keep its kinetic
+and potential components in separate columns; total energy additionally
+includes the quartic nonlinear contribution.
+
+When `restart_state.txt` exists, the solver resumes automatically.
+`numberOfSteps` means additional steps, CSV files append, and frame numbering
+continues. Matching `nx`, `ny`, and `aspectRatio` are required; physical
+parameters may change between invocations. Output frames are journaled and
+committed atomically, so a partially written frame is rolled back on restart.
+Use new data and output directories for an independent run. Existing restart
+metadata always resumes that run; `overwriteOutput` only permits replacement
+of colliding output files.
+
+## Code structure
+
+```text
+src/
+  main.cpp                    shared executable entry point
+  parameters.cpp/.hpp         parse, validate, and record settings
+  spectral.cpp/.hpp           Fourier indexing and retained-band rules
+  fftw_utils.cpp/.hpp         base-grid complex FFTW transforms
+  solver.cpp/.hpp             linear operator, forcing, and time stepping
+  integrator.hpp              shared CPU/CUDA stage formulas
+  output.cpp/.hpp             diagnostics, snapshots, and checkpoints
+  output_transaction.cpp      atomic output recovery and run history
+  backend.hpp                 common nonlinear-backend interface
+  backend_cpu.cpp             FFTW/OpenMP cubic backend
+  backend_mpi.cpp             FFTW-MPI/OpenMP cubic backend
+  backend_cuda.cu             CUDA/cuFFT backend and device time stepping
+tests/
+  numerics.cpp                direct-DFT nonlinear verification
+  regression.py               restart and cross-backend comparisons
+```

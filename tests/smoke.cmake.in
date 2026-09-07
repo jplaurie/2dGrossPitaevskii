@@ -1,0 +1,176 @@
+set(executable "@CMAKE_CURRENT_BINARY_DIR@/gross_pitaevskii_cpu")
+set(run_root "@GP2D_SMOKE_DIR@")
+file(REMOVE_RECURSE "${run_root}")
+file(MAKE_DIRECTORY "${run_root}")
+
+function(run_solver directory)
+  execute_process(
+    COMMAND "${executable}" run.params
+    WORKING_DIRECTORY "${directory}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE stdout
+    ERROR_VARIABLE stderr)
+  if(NOT result EQUAL 0)
+    message(FATAL_ERROR "solver failed in ${directory}:\n${stdout}\n${stderr}")
+  endif()
+endfunction()
+
+function(expect_solver_failure directory expected_error)
+  execute_process(
+    COMMAND "${executable}" run.params
+    WORKING_DIRECTORY "${directory}"
+    RESULT_VARIABLE result
+    OUTPUT_VARIABLE stdout
+    ERROR_VARIABLE stderr)
+  if(result EQUAL 0 OR NOT stderr MATCHES "${expected_error}")
+    message(FATAL_ERROR
+            "solver did not report '${expected_error}' in ${directory}:\n${stdout}\n${stderr}")
+  endif()
+endfunction()
+
+set(basic "${run_root}/basic")
+file(MAKE_DIRECTORY "${basic}")
+file(WRITE "${basic}/run.params" [=[
+nx 8
+ny 8
+timeStep 0.0001
+numberOfSteps 2
+outputIntervalSteps 1
+integrator etd4
+dispersionCoefficient -1
+nonlinearityCoefficient 1
+chemicalPotential 0
+hyperviscosity 0.001
+hyperviscosityOrder 1
+hypoviscosity 0
+forcingEnabled true
+forcingProfile annulus
+forcingWavenumber 2
+forcingWidth 0.6
+forcingAmplitude 0.01
+threadCount 1
+randomSeed 1234
+dataDirectory data
+outputDirectory output
+]=])
+run_solver("${basic}")
+foreach(path data/wavefunction_00000000.dat data/wavefunction_00000001.dat
+             data/wavefunction_00000002.dat data/restart_state.txt
+             data/checkpoint_00000000.bin data/checkpoint_00000002.bin
+             output/diagnostics.csv output/spectra.csv output/fluxes.csv
+             output/forcing_summary.csv output/forcing_spectrum.csv
+             output/resolved_parameters.txt)
+  if(NOT EXISTS "${basic}/${path}")
+    message(FATAL_ERROR "missing expected output: ${path}")
+  endif()
+endforeach()
+file(READ "${basic}/output/diagnostics.csv" diagnostics)
+if(NOT diagnostics MATCHES "time,frame,total_energy")
+  message(FATAL_ERROR "diagnostics.csv has no documented header")
+endif()
+
+foreach(case IN ITEMS etd2 etd3 rk2 gaussian exponential logNormal singleMode)
+  set(case_dir "${run_root}/${case}")
+  file(MAKE_DIRECTORY "${case_dir}")
+  set(method "${case}")
+  if(case STREQUAL "gaussian" OR case STREQUAL "exponential" OR
+     case STREQUAL "logNormal" OR case STREQUAL "singleMode")
+    set(method etd4)
+  endif()
+  set(profile annulus)
+  if(case STREQUAL "gaussian" OR case STREQUAL "exponential" OR
+     case STREQUAL "logNormal" OR case STREQUAL "singleMode")
+    set(profile "${case}")
+  endif()
+  file(WRITE "${case_dir}/run.params"
+"nx 8\nny 12\naspectRatio 2\ntimeStep 0.0001\nnumberOfSteps 2\n"
+"outputIntervalSteps 2\nintegrator ${method}\ndispersionCoefficient -1\n"
+"nonlinearityCoefficient 1\nchemicalPotential 0.2\nhyperviscosity 1e-5\n"
+"hyperviscosityOrder 2\nhypoviscosity 0\nforcingEnabled true\n"
+"forcingProfile ${profile}\nforcingWavenumber 2\nforcingWidth 0.6\n"
+"forcingAmplitude 0.01\nforcingShapeOrder 4\nforcingLogWidth 0.2\n"
+"randomSeed 77\nthreadCount 2\ndataDirectory data\noutputDirectory output\n")
+  run_solver("${case_dir}")
+  file(READ "${case_dir}/output/diagnostics.csv" values)
+  if(values MATCHES "[Nn][Aa][Nn]" OR values MATCHES "[Ii][Nn][Ff]")
+    message(FATAL_ERROR "${case} produced a non-finite diagnostic: ${values}")
+  endif()
+endforeach()
+
+foreach(kind IN ITEMS full split)
+  set(case_dir "${run_root}/restart_${kind}")
+  file(MAKE_DIRECTORY "${case_dir}")
+  if(kind STREQUAL "full")
+    set(step_count 4)
+  else()
+    set(step_count 2)
+  endif()
+  file(WRITE "${case_dir}/run.params"
+"nx 8\nny 8\ntimeStep 0.0001\nnumberOfSteps ${step_count}\noutputIntervalSteps 2\n"
+"integrator etd4\ndispersionCoefficient -1\nnonlinearityCoefficient 1\n"
+"hyperviscosity 1e-5\nhyperviscosityOrder 2\nhypoviscosity 0\n"
+"forcingEnabled true\nforcingProfile annulus\nforcingWavenumber 2\n"
+"forcingWidth 0.6\nforcingAmplitude 0.01\nrandomSeed 991\nthreadCount 1\n"
+"dataDirectory data\noutputDirectory output\n")
+  run_solver("${case_dir}")
+  if(kind STREQUAL "split")
+    run_solver("${case_dir}")
+  endif()
+endforeach()
+execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files
+  "${run_root}/restart_full/data/checkpoint_00000002.bin"
+  "${run_root}/restart_split/data/checkpoint_00000002.bin"
+  RESULT_VARIABLE comparison)
+if(NOT comparison EQUAL 0)
+  message(FATAL_ERROR "stochastic restart differs from uninterrupted run")
+endif()
+
+set(nonfinite "${run_root}/nonfinite")
+file(MAKE_DIRECTORY "${nonfinite}")
+file(WRITE "${nonfinite}/run.params" [=[
+nx 8
+ny 8
+numberOfSteps 1
+outputIntervalSteps 1
+hyperviscosity 1e308
+hyperviscosityOrder 8
+hypoviscosity 0
+forcingEnabled false
+dataDirectory data
+outputDirectory output
+]=])
+expect_solver_failure("${nonfinite}" "non-finite coefficient")
+
+set(negative "${run_root}/negative")
+file(MAKE_DIRECTORY "${negative}")
+file(WRITE "${negative}/run.params" [=[
+nx 8
+ny 8
+numberOfSteps -1
+forcingEnabled false
+dataDirectory data
+outputDirectory output
+]=])
+expect_solver_failure("${negative}" "numberOfSteps cannot be negative")
+
+set(unforced_unused "${run_root}/unforced_unused")
+file(MAKE_DIRECTORY "${unforced_unused}")
+file(WRITE "${unforced_unused}/run.params" [=[
+nx 8
+ny 8
+numberOfSteps 1
+outputIntervalSteps 1
+hyperviscosity 0
+hypoviscosity 0
+forcingEnabled false
+forcingProfile singleMode
+forcingWavenumber 0.5
+forcingWidth -1
+forcingAmplitude -1
+forcingShapeOrder 0
+forcingLogWidth 0
+targetWaveActionInjectionRate -1
+dataDirectory data
+outputDirectory output
+]=])
+run_solver("${unforced_unused}")
