@@ -25,6 +25,7 @@ __host__ __device__ inline cufftDoubleComplex operator*(double a,
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -52,6 +53,8 @@ public:
   DeviceBuffer(const DeviceBuffer &) = delete;
   DeviceBuffer &operator=(const DeviceBuffer &) = delete;
   void allocate(std::size_t count) {
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T))
+      throw std::runtime_error("device buffer size overflow");
     cudaFree(data_);
     data_ = nullptr;
     count_ = count;
@@ -245,14 +248,11 @@ public:
     coefficients_ = {pointers[0], pointers[1], pointers[2], pointers[3],
                      pointers[4], pointers[5], pointers[6], pointers[7],
                      pointers[8], pointers[9]};
-    for (const std::size_t index : {0UL, 1UL, 4UL})
-      stageBuffers_[index].allocate(baseCount_);
-    if (p_.integrator == Integrator::etd3 || p_.integrator == Integrator::etd4)
-      for (const std::size_t index : {2UL, 5UL})
-        stageBuffers_[index].allocate(baseCount_);
-    if (p_.integrator == Integrator::etd4)
-      for (const std::size_t index : {3UL, 6UL})
-        stageBuffers_[index].allocate(baseCount_);
+    const std::size_t stageCount = p_.nonlinearStageCount();
+    for (std::size_t i = 0; i < stageCount; ++i)
+      stageBuffers_[i].allocate(baseCount_);
+    for (std::size_t i = 1; i < stageCount; ++i)
+      stageBuffers_[i + 3].allocate(baseCount_);
     stages_ = {stageBuffers_[0].data(), stageBuffers_[1].data(),
                stageBuffers_[2].data(), stageBuffers_[3].data(),
                stageBuffers_[4].data(), stageBuffers_[5].data(),
@@ -281,12 +281,11 @@ public:
     rightHandSide(input_.data(), stages_.n1);
     launchStage(0);
     rightHandSide(stages_.a, stages_.n2);
-    if (p_.integrator == Integrator::etd3 ||
-        p_.integrator == Integrator::etd4) {
+    if (p_.nonlinearStageCount() >= 3) {
       launchStage(1);
       rightHandSide(stages_.b, stages_.n3);
     }
-    if (p_.integrator == Integrator::etd4) {
+    if (p_.nonlinearStageCount() == 4) {
       launchStage(2);
       rightHandSide(stages_.c, stages_.n4);
     }

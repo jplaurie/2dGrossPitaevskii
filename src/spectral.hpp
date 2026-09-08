@@ -30,6 +30,13 @@ inline std::size_t paddedIndexForBase(std::size_t index, std::size_t baseCount,
              : static_cast<std::size_t>(static_cast<long>(paddedCount) + wave);
 }
 
+inline std::size_t paddedIndexForBaseMode(const Parameters &p,
+                                          std::size_t index) {
+  const std::size_t x = index % p.nx, y = index / p.nx;
+  return spectralIndex(paddedIndexForBase(x, p.nx, p.mx()),
+                       paddedIndexForBase(y, p.ny, p.my()), p.mx());
+}
+
 double waveNumberSquared(const Parameters &parameters, std::size_t x,
                          std::size_t y);
 double ginzburgLandauFactor(const Parameters &parameters, double k2);

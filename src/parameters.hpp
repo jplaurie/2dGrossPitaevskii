@@ -63,6 +63,11 @@ struct Parameters {
   [[nodiscard]] bool usesEtd() const {
     return integrator != Integrator::integratingFactorRk2;
   }
+  [[nodiscard]] std::size_t nonlinearStageCount() const {
+    return integrator == Integrator::etd4   ? 4
+           : integrator == Integrator::etd3 ? 3
+                                            : 2;
+  }
 };
 
 [[nodiscard]] const char *integratorName(Integrator integrator);

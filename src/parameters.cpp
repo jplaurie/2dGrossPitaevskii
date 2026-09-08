@@ -1,12 +1,15 @@
 #include "parameters.hpp"
+#include "io_utils.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 namespace {
@@ -38,6 +41,24 @@ std::string trim(const std::string &value) {
   if (first == std::string::npos)
     return {};
   return value.substr(first, value.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+template <class T, std::size_t N>
+bool parseMember(
+    std::string_view key, const std::string &value, Parameters &parameters,
+    const std::pair<std::string_view, T Parameters::*> (&members)[N]) {
+  const auto entry = std::find_if(
+      std::begin(members), std::end(members),
+      [key](const auto &candidate) { return candidate.first == key; });
+  if (entry == std::end(members))
+    return false;
+  if constexpr (std::is_same_v<T, bool>)
+    parameters.*entry->second = parseBool(value, std::string(key));
+  else if constexpr (std::is_same_v<T, std::filesystem::path>)
+    parameters.*entry->second = value;
+  else
+    parameters.*entry->second = parseNumber<T>(value, std::string(key));
+  return true;
 }
 
 Integrator parseIntegrator(const std::string &text) {
@@ -138,81 +159,58 @@ Parameters readParameters(const std::filesystem::path &path) {
       throw std::runtime_error("invalid parameter line " +
                                std::to_string(lineNumber));
 
-    const auto number = [&]<class T>(T &member) {
-      member = parseNumber<T>(value, key);
-    };
-    const auto boolean = [&](bool &member) { member = parseBool(value, key); };
-    if (key == "nx")
-      number(p.nx);
-    else if (key == "ny")
-      number(p.ny);
-    else if (key == "aspectRatio")
-      number(p.aspectRatio);
-    else if (key == "timeStep")
-      number(p.timeStep);
-    else if (key == "numberOfSteps")
-      number(p.numberOfSteps);
-    else if (key == "outputIntervalSteps")
-      number(p.outputIntervalSteps);
-    else if (key == "integrator")
+    static constexpr std::pair<std::string_view, std::size_t Parameters::*>
+        sizes[]{{"nx", &Parameters::nx}, {"ny", &Parameters::ny}};
+    static constexpr std::pair<std::string_view, std::uint64_t Parameters::*>
+        counts[]{{"numberOfSteps", &Parameters::numberOfSteps},
+                 {"outputIntervalSteps", &Parameters::outputIntervalSteps},
+                 {"randomSeed", &Parameters::randomSeed}};
+    static constexpr std::pair<std::string_view, double Parameters::*> reals[]{
+        {"aspectRatio", &Parameters::aspectRatio},
+        {"timeStep", &Parameters::timeStep},
+        {"dispersionCoefficient", &Parameters::dispersionCoefficient},
+        {"nonlinearityCoefficient", &Parameters::nonlinearityCoefficient},
+        {"chemicalPotential", &Parameters::chemicalPotential},
+        {"hyperviscosity", &Parameters::hyperviscosity},
+        {"hyperviscosityOrder", &Parameters::hyperviscosityOrder},
+        {"hyperviscosityCutoff", &Parameters::hyperviscosityCutoff},
+        {"hypoviscosity", &Parameters::hypoviscosity},
+        {"hypoviscosityOrder", &Parameters::hypoviscosityOrder},
+        {"hypoviscosityCutoff", &Parameters::hypoviscosityCutoff},
+        {"ginzburgLandauDamping", &Parameters::ginzburgLandauDamping},
+        {"ginzburgLandauCutoff", &Parameters::ginzburgLandauCutoff},
+        {"forcingWavenumber", &Parameters::forcingWavenumber},
+        {"forcingWidth", &Parameters::forcingWidth},
+        {"forcingAmplitude", &Parameters::forcingAmplitude},
+        {"forcingShapeOrder", &Parameters::forcingShapeOrder},
+        {"forcingLogWidth", &Parameters::forcingLogWidth},
+        {"targetWaveActionInjectionRate",
+         &Parameters::targetWaveActionInjectionRate}};
+    static constexpr std::pair<std::string_view, bool Parameters::*> booleans[]{
+        {"hyperviscosityCutoffEnabled",
+         &Parameters::hyperviscosityCutoffEnabled},
+        {"hypoviscosityCutoffEnabled", &Parameters::hypoviscosityCutoffEnabled},
+        {"forcingEnabled", &Parameters::forcingEnabled},
+        {"writeModeDiagnostics", &Parameters::writeModeDiagnostics},
+        {"overwriteOutput", &Parameters::overwriteOutput}};
+    static constexpr std::pair<std::string_view,
+                               std::filesystem::path Parameters::*>
+        paths[]{{"initialConditionFile", &Parameters::initialConditionFile},
+                {"dataDirectory", &Parameters::dataDirectory},
+                {"outputDirectory", &Parameters::outputDirectory}};
+
+    const bool recognized = parseMember(key, value, p, sizes) ||
+                            parseMember(key, value, p, counts) ||
+                            parseMember(key, value, p, reals) ||
+                            parseMember(key, value, p, booleans) ||
+                            parseMember(key, value, p, paths);
+    if (key == "integrator")
       p.integrator = parseIntegrator(value);
-    else if (key == "dispersionCoefficient")
-      number(p.dispersionCoefficient);
-    else if (key == "nonlinearityCoefficient")
-      number(p.nonlinearityCoefficient);
-    else if (key == "chemicalPotential")
-      number(p.chemicalPotential);
-    else if (key == "hyperviscosity")
-      number(p.hyperviscosity);
-    else if (key == "hyperviscosityOrder")
-      number(p.hyperviscosityOrder);
-    else if (key == "hyperviscosityCutoffEnabled")
-      boolean(p.hyperviscosityCutoffEnabled);
-    else if (key == "hyperviscosityCutoff")
-      number(p.hyperviscosityCutoff);
-    else if (key == "hypoviscosity")
-      number(p.hypoviscosity);
-    else if (key == "hypoviscosityOrder")
-      number(p.hypoviscosityOrder);
-    else if (key == "hypoviscosityCutoffEnabled")
-      boolean(p.hypoviscosityCutoffEnabled);
-    else if (key == "hypoviscosityCutoff")
-      number(p.hypoviscosityCutoff);
-    else if (key == "ginzburgLandauDamping")
-      number(p.ginzburgLandauDamping);
-    else if (key == "ginzburgLandauCutoff")
-      number(p.ginzburgLandauCutoff);
-    else if (key == "forcingEnabled")
-      boolean(p.forcingEnabled);
     else if (key == "forcingProfile")
       p.forcingProfile = parseForcingProfile(value);
-    else if (key == "forcingWavenumber")
-      number(p.forcingWavenumber);
-    else if (key == "forcingWidth")
-      number(p.forcingWidth);
-    else if (key == "forcingAmplitude")
-      number(p.forcingAmplitude);
-    else if (key == "forcingShapeOrder")
-      number(p.forcingShapeOrder);
-    else if (key == "forcingLogWidth")
-      number(p.forcingLogWidth);
-    else if (key == "targetWaveActionInjectionRate")
-      number(p.targetWaveActionInjectionRate);
-    else if (key == "randomSeed")
-      number(p.randomSeed);
-    else if (key == "writeModeDiagnostics")
-      boolean(p.writeModeDiagnostics);
     else if (key == "threadCount")
-      number(p.threadCount);
-    else if (key == "overwriteOutput")
-      boolean(p.overwriteOutput);
-    else if (key == "initialConditionFile")
-      p.initialConditionFile = value;
-    else if (key == "dataDirectory")
-      p.dataDirectory = value;
-    else if (key == "outputDirectory")
-      p.outputDirectory = value;
-    else
+      p.threadCount = parseNumber<int>(value, key);
+    else if (!recognized)
       throw std::runtime_error("unknown parameter key on line " +
                                std::to_string(lineNumber) + ": " + key);
   }
@@ -228,8 +226,9 @@ void validateParameters(const Parameters &p) {
   if (p.nx > 2 * (fftLimit / 3) || p.ny > 2 * (fftLimit / 3))
     throw std::runtime_error(
         "3/2-rule grid dimensions exceed FFT library limits");
-  const auto allocationLimit =
-      static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+  const auto allocationLimit = std::min(
+      static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()),
+      std::numeric_limits<std::size_t>::max() / sizeof(std::complex<double>));
   const auto validateProduct = [&](std::size_t a, std::size_t b,
                                    const char *description) {
     if (a && b > allocationLimit / a)
@@ -349,8 +348,5 @@ void writeParameterRecord(const Parameters &p, const std::string &backend,
       << "initialConditionFile " << p.initialConditionFile.string() << '\n'
       << "dataDirectory " << p.dataDirectory.string() << '\n'
       << "outputDirectory " << p.outputDirectory.string() << '\n';
-  out.close();
-  if (!out)
-    throw std::runtime_error("failed while writing parameter record: " +
-                             path.string());
+  closeChecked(out, "failed while writing parameter record: " + path.string());
 }

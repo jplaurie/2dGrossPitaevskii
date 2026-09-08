@@ -79,9 +79,51 @@ def cpu_checks(root, cpu):
     assert [row["frame"] for row in rows] == ["1", "2"]
     assert all(math.isfinite(float(row["total_energy"])) for row in rows)
     assert "kinetic_energy" in rows[0]
-    for name in ("spectra.csv", "fluxes.csv", "forcing_summary.csv"):
+    for quantity in ("total_energy_dissipation_hypo",
+                     "total_energy_dissipation_hyper"):
+        assert all(math.isfinite(float(row[quantity])) for row in rows)
+    for name in ("spectra.csv", "forcing_summary.csv"):
         header = (full / "output" / name).read_text().splitlines()[0]
         assert "quadratic_energy" in header
+    flux_path = full / "output/fluxes.csv"
+    with flux_path.open() as stream:
+        fluxes = csv.DictReader(stream)
+        assert fluxes.fieldnames == [
+            "time", "frame", "wavenumber", "wave_action_flux",
+            "full_energy_flux", "segment_mean_wave_action_flux",
+            "segment_mean_full_energy_flux"]
+        flux_rows = list(fluxes)
+    checked_flux_columns = ("wave_action_flux", "full_energy_flux")
+    assert all(math.isfinite(float(row[quantity]))
+               for row in flux_rows for quantity in checked_flux_columns)
+    for diagnostic in rows:
+        frame_rows = [row for row in flux_rows
+                      if row["frame"] == diagnostic["frame"]]
+        scale = max(1.0, *(abs(float(row["full_energy_flux"]))
+                           for row in frame_rows))
+        assert abs(float(frame_rows[-1]["full_energy_flux"])) < 2e-10 * scale
+
+    # For a spatially constant field and order-zero damping, the full rate has
+    # the closed form 2*A*nu*(mu*|psi|^2 + g*|psi|^4).
+    damping = root / "constant_damping"
+    damping.mkdir()
+    damping_initial = damping / "initial.dat"
+    damping_initial.write_text((" ".join(["0.4 0.2"] * 12) + "\n") * 14)
+    damping_params = write_params(
+        damping, numberOfSteps=1, outputIntervalSteps=1,
+        initialConditionFile=damping_initial, forcingEnabled="false",
+        hyperviscosity=.2, hyperviscosityOrder=0, hypoviscosity=0)
+    run(cpu, damping_params)
+    with (damping / "output/diagnostics.csv").open() as stream:
+        damping_row = next(csv.DictReader(stream))
+    amplitude = mode(checkpoint(damping, 1), 12, 0, 0)
+    density = abs(amplitude) ** 2
+    area = 1.5 * (2 * math.pi) ** 2
+    expected = 2 * area * .2 * (.1 * density + 2 * density ** 2)
+    assert math.isclose(float(damping_row["total_energy_dissipation_hyper"]),
+                        expected, rel_tol=2e-11)
+    assert (float(damping_row["total_energy_dissipation_hyper"])
+            > float(damping_row["quadratic_energy_dissipation_hyper"]))
     split = root / "split"
     params = write_params(split, numberOfSteps=2)
     run(cpu, params)

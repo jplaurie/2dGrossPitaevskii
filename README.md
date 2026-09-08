@@ -187,7 +187,7 @@ Fresh runs save frame zero, then the requested cadence and final step.
 | `dataDirectory/restart_state.txt` | Latest time, frame, grid identity, and RNG state |
 | `outputDirectory/diagnostics.csv` | Hamiltonian components, wave action, and damping rates |
 | `outputDirectory/spectra.csv` | Wave-action and quadratic-energy shell spectra |
-| `outputDirectory/fluxes.csv` | Corresponding nonlinear spectral transfers |
+| `outputDirectory/fluxes.csv` | Wave-action and full Hamiltonian-energy fluxes |
 | `outputDirectory/modes.csv` | Optional selected complex Fourier modes |
 | `outputDirectory/forcing_*.csv` | Forcing summary and spectrum |
 | `outputDirectory/segments/` | Per-invocation resolved parameters and forcing records |
@@ -195,7 +195,14 @@ Fresh runs save frame zero, then the requested cadence and final step.
 Here `quadratic_energy` means the kinetic-plus-chemical-potential part,
 `area * sum_k (-c*|k|^2 + mu)*|psi_k|^2`. The diagnostics keep its kinetic
 and potential components in separate columns; total energy additionally
-includes the quartic nonlinear contribution.
+includes the quartic nonlinear contribution. For consistency with the
+two-pass de-aliased cubic term, quartic energy is evaluated from the retained
+spectrum of `psi^2`. The energy flux includes both the quadratic and quartic
+transfers and uses the legacy low-wavenumber cumulative convention. The
+`total_energy_dissipation_hypo` and
+`total_energy_dissipation_hyper` columns include each operator's effect on
+both the quadratic and quartic Hamiltonian energy; the similarly named
+`quadratic_energy_*` columns retain the quadratic-only values.
 
 When `restart_state.txt` exists, the solver resumes automatically.
 `numberOfSteps` means additional steps, CSV files append, and frame numbering

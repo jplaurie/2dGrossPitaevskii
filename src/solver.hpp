@@ -4,6 +4,7 @@
 #include "fftw_utils.hpp"
 #include "output.hpp"
 
+#include <array>
 #include <memory>
 #include <random>
 #include <vector>
@@ -20,13 +21,16 @@ private:
   void generateNoise(SpectralField &noise);
   void rightHandSide(const SpectralField &input, SpectralField &output);
   void step(SpectralField &wavefunction);
+  double writeFrame(RestartState &state, DiagnosticsAverages *averages);
 
   Parameters p_;
   std::unique_ptr<NonlinearBackend> backend_;
   BaseTransform baseTransform_;
   SpectralField linear_;
   IntegrationCoefficients coefficients_;
-  SpectralField noise_, n1_, n2_, n3_, n4_, stageA_, stageB_, stageC_;
+  SpectralField noise_;
+  std::array<SpectralField, 4> nonlinearStages_;
+  std::array<SpectralField, 3> stageStates_;
   SpectralField diagnosticNonlinear_, deterministicForcing_;
   std::vector<double> forcingAmplitude_, noiseScale_;
   std::vector<std::size_t> forcedIndices_;

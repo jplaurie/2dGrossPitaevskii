@@ -1,3 +1,4 @@
+#include "io_utils.hpp"
 #include "output.hpp"
 
 #include <array>
@@ -159,9 +160,7 @@ void beginOutputTransaction(const Parameters &p, std::uint64_t frame) {
     out << journal.csvExisted[i] << ' ' << journal.csvSizes[i] << '\n';
   for (const bool existed : journal.frameExisted)
     out << existed << '\n';
-  out.close();
-  if (!out)
-    throw std::runtime_error("cannot write output transaction journal");
+  closeChecked(out, "cannot write output transaction journal");
   std::filesystem::rename(temporary,
                           p.dataDirectory / "output_transaction.txt");
   for (std::size_t i = 0; i < files.size(); ++i)
@@ -203,9 +202,7 @@ void writeRunRecords(const Parameters &p, const std::string &backend,
   std::ofstream manifest(segment / "segment.txt");
   manifest << std::setprecision(17) << "startTime " << time << "\nstartFrame "
            << frame << "\nstochasticUpdate exact_linear_covariance_v1\n";
-  manifest.close();
-  if (!manifest)
-    throw std::runtime_error("cannot write run segment record");
+  closeChecked(manifest, "cannot write run segment record");
   for (const char *name : {"resolved_parameters.txt", "forcing_summary.csv",
                            "forcing_spectrum.csv"}) {
     const auto temporary = p.outputDirectory / (std::string(name) + ".tmp");

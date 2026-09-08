@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "fftw_utils.hpp"
 #include "spectral.hpp"
 
 #include <algorithm>
@@ -111,9 +112,85 @@ int main(int argc, char **argv) {
       throw std::runtime_error(
           "dealiased cubic term disagrees with direct DFT: " +
           std::to_string(error));
+
+    BaseTransform transform(p);
+    SpectralField conservativeRate(w.size()), dampingRate(w.size()),
+        zeroRate(w.size());
+    for (std::size_t y = 0; y < p.ny; ++y)
+      for (std::size_t x = 0; x < p.nx; ++x) {
+        const std::size_t i = spectralIndex(x, y, p.nx);
+        const double k2 = waveNumberSquared(p, x, y);
+        const double weight =
+            -p.dispersionCoefficient * k2 + p.chemicalPotential;
+        conservativeRate[i] = Complex(0.0, -weight) * w[i] + actual[i];
+        dampingRate[i] = -(0.2 + 0.01 * k2) * w[i];
+      }
+    SpectralField square, conservativeSquareRate;
+    transform.projectedSquareSpectra(w, conservativeRate, square,
+                                     conservativeSquareRate);
+    SpectralField dampingSquareRate;
+    transform.projectedSquareSpectra(w, dampingRate, square, dampingSquareRate);
+    const double area = p.lx() * p.ly();
+    const auto quadraticRate = [&](const SpectralField &rate) {
+      double value = 0.0;
+      for (std::size_t y = 0; y < p.ny; ++y)
+        for (std::size_t x = 0; x < p.nx; ++x) {
+          const std::size_t i = spectralIndex(x, y, p.nx);
+          const double weight =
+              -p.dispersionCoefficient * waveNumberSquared(p, x, y) +
+              p.chemicalPotential;
+          value += 2.0 * area * weight * std::real(std::conj(w[i]) * rate[i]);
+        }
+      return value;
+    };
+    const auto quarticRate = [&](const SpectralField &rate) {
+      double value = 0.0;
+      for (std::size_t i = 0; i < square.size(); ++i)
+        value += area * p.nonlinearityCoefficient *
+                 std::real(std::conj(square[i]) * rate[i]);
+      return value;
+    };
+    const double conservativeEnergyRate =
+        quadraticRate(conservativeRate) + quarticRate(conservativeSquareRate);
+    if (std::abs(conservativeEnergyRate) > 2.e-11)
+      throw std::runtime_error(
+          "projected Hamiltonian transfer does not close: " +
+          std::to_string(conservativeEnergyRate));
+
+    const auto projectedEnergy = [&](const SpectralField &state) {
+      SpectralField stateSquare, unused;
+      transform.projectedSquareSpectra(state, zeroRate, stateSquare, unused);
+      double value = 0.0;
+      for (std::size_t y = 0; y < p.ny; ++y)
+        for (std::size_t x = 0; x < p.nx; ++x) {
+          const std::size_t i = spectralIndex(x, y, p.nx);
+          const double weight =
+              -p.dispersionCoefficient * waveNumberSquared(p, x, y) +
+              p.chemicalPotential;
+          value += area * weight * std::norm(state[i]);
+        }
+      for (const Complex squareMode : stateSquare)
+        value += 0.5 * area * p.nonlinearityCoefficient * std::norm(squareMode);
+      return value;
+    };
+    constexpr double epsilon = 1.e-7;
+    SpectralField plus = w, minus = w;
+    for (std::size_t i = 0; i < w.size(); ++i) {
+      plus[i] += epsilon * dampingRate[i];
+      minus[i] -= epsilon * dampingRate[i];
+    }
+    const double finiteDifferenceLoss =
+        -(projectedEnergy(plus) - projectedEnergy(minus)) / (2.0 * epsilon);
+    const double analyticLoss =
+        -quadraticRate(dampingRate) - quarticRate(dampingSquareRate);
+    if (std::abs(finiteDifferenceLoss - analyticLoss) >
+        2.e-8 * std::max(1.0, std::abs(analyticLoss)))
+      throw std::runtime_error(
+          "projected-Hamiltonian damping rate is inconsistent: " +
+          std::to_string(finiteDifferenceLoss - analyticLoss));
     backend.reset();
     backendFinalize();
-    std::cout << "two-pass dealiased cubic term agrees with direct DFT\n";
+    std::cout << "dealiased cubic term and projected Hamiltonian agree\n";
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

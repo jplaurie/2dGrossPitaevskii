@@ -1,12 +1,12 @@
 #include "backend.hpp"
 #include "fftw_utils.hpp"
+#include "parallel.hpp"
 #include "spectral.hpp"
 
 #include <fftw3-mpi.h>
 #include <mpi.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
@@ -19,6 +19,11 @@
 namespace {
 int rank = 0;
 bool fftwThreadsInitialized = false;
+
+struct LocalMode {
+  std::size_t baseIndex, paddedIndex;
+  Complex nonlinearFactor;
+};
 
 void mpiCheck(int status, const char *operation) {
   if (status == MPI_SUCCESS)
@@ -49,86 +54,49 @@ public:
     inverseSquare_ = makePlan(squareHat_, square_, FFTW_BACKWARD);
     forwardNonlinear_ = makePlan(paddedHat_, squareHat_, FFTW_FORWARD);
     if (!inversePsi_ || !forwardSquare_ || !inverseSquare_ ||
-        !forwardNonlinear_) {
-      releasePlans();
+        !forwardNonlinear_)
       throw std::runtime_error("FFTW-MPI could not create dealiased plans");
+    const double scale = 1.0 / static_cast<double>(p.mx() * p.my());
+    for (std::size_t i = 0; i < baseCount; ++i) {
+      const std::size_t padded = paddedIndexForBaseMode(p, i);
+      const ptrdiff_t paddedRow = static_cast<ptrdiff_t>(padded / p.mx());
+      if (paddedRow < firstRow_ || paddedRow >= firstRow_ + localRows_)
+        continue;
+      const std::size_t localIndex =
+          padded - static_cast<std::size_t>(firstRow_) * p.mx();
+      const double gamma =
+          ginzburgLandauFactor(p, waveNumberSquared(p, i % p.nx, i / p.nx));
+      localModes_.push_back(
+          {i, localIndex,
+           p.nonlinearityCoefficient * scale / Complex(-gamma, 1.0)});
     }
   }
-
-  ~MpiBackend() override { releasePlans(); }
 
   void evaluate(const SpectralField &wavefunction,
                 SpectralField &result) override {
     if (wavefunction.size() != p_.nx * p_.ny)
       throw std::runtime_error("invalid nonlinear input size");
     std::fill(paddedHat_.begin(), paddedHat_.end(), Complex{});
-    for (std::size_t y = 0; y < p_.ny; ++y) {
-      const ptrdiff_t py =
-          static_cast<ptrdiff_t>(paddedIndexForBase(y, p_.ny, p_.my()));
-      if (py < firstRow_ || py >= firstRow_ + localRows_)
-        continue;
-      const std::size_t localY = static_cast<std::size_t>(py - firstRow_);
-      for (std::size_t x = 0; x < p_.nx; ++x) {
-        const std::size_t px = paddedIndexForBase(x, p_.nx, p_.mx());
-        paddedHat_[spectralIndex(px, localY, p_.mx())] =
-            wavefunction[spectralIndex(x, y, p_.nx)];
-      }
-    }
+    forEachIndex(localModes_.size(), [&](std::size_t i) {
+      const LocalMode &mode = localModes_[i];
+      paddedHat_[mode.paddedIndex] = wavefunction[mode.baseIndex];
+    });
     fftw_execute(inversePsi_);
     const std::size_t localCount =
         static_cast<std::size_t>(localRows_) * p_.mx();
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (localCount >= 16384)
-#endif
-    for (std::ptrdiff_t raw = 0; raw < static_cast<std::ptrdiff_t>(localCount);
-         ++raw) {
-      const auto i = static_cast<std::size_t>(raw);
-      square_[i] = psi_[i] * psi_[i];
-    }
+    squarePointwise(psi_, square_, localCount);
     fftw_execute(forwardSquare_);
-    const double scale = 1.0 / static_cast<double>(p_.mx() * p_.my());
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (localCount >= 16384)
-#endif
-    for (std::ptrdiff_t raw = 0; raw < static_cast<std::ptrdiff_t>(localCount);
-         ++raw) {
-      const auto i = static_cast<std::size_t>(raw);
-      const std::size_t px = i % p_.mx();
-      const std::size_t localY = i / p_.mx();
-      const std::size_t py = static_cast<std::size_t>(firstRow_) + localY;
-      if (retainedPaddedWave(signedWave(px, p_.mx()), p_.nx) &&
-          retainedPaddedWave(signedWave(py, p_.my()), p_.ny))
-        squareHat_[i] *= scale;
-      else
-        squareHat_[i] = Complex{};
-    }
+    filterPaddedSpectrum(squareHat_, p_, static_cast<std::size_t>(firstRow_),
+                         static_cast<std::size_t>(localRows_));
     fftw_execute(inverseSquare_);
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (localCount >= 16384)
-#endif
-    for (std::ptrdiff_t raw = 0; raw < static_cast<std::ptrdiff_t>(localCount);
-         ++raw) {
-      const auto i = static_cast<std::size_t>(raw);
-      paddedHat_[i] = square_[i] * std::conj(psi_[i]);
-    }
+    multiplyConjugatePointwise(square_, psi_, paddedHat_, localCount);
     fftw_execute(forwardNonlinear_);
     std::fill(local_.begin(), local_.end(), Complex{});
-    for (std::size_t y = 0; y < p_.ny; ++y) {
-      const ptrdiff_t py =
-          static_cast<ptrdiff_t>(paddedIndexForBase(y, p_.ny, p_.my()));
-      if (py < firstRow_ || py >= firstRow_ + localRows_)
-        continue;
-      const std::size_t localY = static_cast<std::size_t>(py - firstRow_);
-      for (std::size_t x = 0; x < p_.nx; ++x) {
-        const std::size_t px = paddedIndexForBase(x, p_.nx, p_.mx());
-        const double gamma =
-            ginzburgLandauFactor(p_, waveNumberSquared(p_, x, y));
-        local_[spectralIndex(x, y, p_.nx)] =
-            p_.nonlinearityCoefficient * scale *
-            squareHat_[spectralIndex(px, localY, p_.mx())] /
-            Complex(-gamma, 1.0);
-      }
-    }
+    forEachIndex(localModes_.size(), [&](std::size_t i) {
+      const LocalMode &mode = localModes_[i];
+      local_[mode.baseIndex] =
+          mode.nonlinearFactor * squareHat_[mode.paddedIndex];
+    });
     result.resize(local_.size());
     mpiCheck(MPI_Allreduce(local_.data(), result.data(),
                            static_cast<int>(local_.size()),
@@ -145,21 +113,12 @@ private:
                                 MPI_COMM_WORLD, direction, FFTW_ESTIMATE);
   }
 
-  void releasePlans() noexcept {
-    for (fftw_plan *plan :
-         {&inversePsi_, &forwardSquare_, &inverseSquare_, &forwardNonlinear_}) {
-      if (*plan)
-        fftw_destroy_plan(*plan);
-      *plan = nullptr;
-    }
-  }
-
   Parameters p_;
   ptrdiff_t allocLocal_ = 0, localRows_ = 0, firstRow_ = 0;
   FftwComplexField paddedHat_, psi_, squareHat_, square_;
   SpectralField local_;
-  fftw_plan inversePsi_ = nullptr, forwardSquare_ = nullptr,
-            inverseSquare_ = nullptr, forwardNonlinear_ = nullptr;
+  std::vector<LocalMode> localModes_;
+  FftwPlan inversePsi_, forwardSquare_, inverseSquare_, forwardNonlinear_;
 };
 } // namespace
 

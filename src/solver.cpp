@@ -1,4 +1,5 @@
 #include "solver.hpp"
+#include "parallel.hpp"
 #include "spectral.hpp"
 
 #include <algorithm>
@@ -15,19 +16,8 @@
 #endif
 
 namespace {
-[[maybe_unused]] constexpr std::size_t parallelThreshold = 16384;
-
 SpectralField field(const Parameters &p, bool needed = true) {
   return needed ? SpectralField(p.nx * p.ny) : SpectralField{};
-}
-
-template <class Operation>
-void forEachIndex(std::size_t count, Operation operation) {
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (count >= parallelThreshold)
-#endif
-  for (std::ptrdiff_t raw = 0; raw < static_cast<std::ptrdiff_t>(count); ++raw)
-    operation(static_cast<std::size_t>(raw));
 }
 
 void requireFinite(const SpectralField &values, const char *description) {
@@ -51,19 +41,6 @@ Solver::Solver(Parameters p, std::unique_ptr<NonlinearBackend> backend)
       linear_(field(p_)),
       noise_(field(p_, p_.forcingEnabled &&
                            p_.forcingProfile != ForcingProfile::singleMode)),
-      n1_(field(p_, !backend_->deviceTimeStepping())),
-      n2_(field(p_, !backend_->deviceTimeStepping())),
-      n3_(field(p_, !backend_->deviceTimeStepping() &&
-                        (p_.integrator == Integrator::etd3 ||
-                         p_.integrator == Integrator::etd4))),
-      n4_(field(p_, !backend_->deviceTimeStepping() &&
-                        p_.integrator == Integrator::etd4)),
-      stageA_(field(p_, !backend_->deviceTimeStepping())),
-      stageB_(field(p_, !backend_->deviceTimeStepping() &&
-                            (p_.integrator == Integrator::etd3 ||
-                             p_.integrator == Integrator::etd4))),
-      stageC_(field(p_, !backend_->deviceTimeStepping() &&
-                            p_.integrator == Integrator::etd4)),
       diagnosticNonlinear_(field(p_)),
       deterministicForcing_(
           field(p_, p_.forcingEnabled &&
@@ -76,6 +53,13 @@ Solver::Solver(Parameters p, std::unique_ptr<NonlinearBackend> backend)
 #endif
   std::filesystem::create_directories(p_.dataDirectory);
   std::filesystem::create_directories(p_.outputDirectory);
+  if (!backend_->deviceTimeStepping()) {
+    const std::size_t count = p_.nonlinearStageCount();
+    for (std::size_t i = 0; i < count; ++i)
+      nonlinearStages_[i] = field(p_);
+    for (std::size_t i = 1; i < count; ++i)
+      stageStates_[i - 1] = field(p_);
+  }
   buildLinearOperator();
   buildIntegrationCoefficients();
   SpectralField{}.swap(linear_);
@@ -284,32 +268,52 @@ void Solver::step(SpectralField &w) {
     return;
   }
   const auto c = coefficients_.pointers();
-  rightHandSide(w, n1_);
+  auto &n = nonlinearStages_;
+  auto &stage = stageStates_;
+  rightHandSide(w, n[0]);
   forEachIndex(w.size(), [&](std::size_t i) {
-    stageA_[i] =
-        integrationStageA(p_.integrator, p_.timeStep, i, c, w[i], n1_[i]);
+    stage[0][i] =
+        integrationStageA(p_.integrator, p_.timeStep, i, c, w[i], n[0][i]);
   });
-  rightHandSide(stageA_, n2_);
-  if (!n3_.empty()) {
+  rightHandSide(stage[0], n[1]);
+  if (!n[2].empty()) {
     forEachIndex(w.size(), [&](std::size_t i) {
-      stageB_[i] = integrationStageB(p_.integrator, i, c, w[i], n1_[i], n2_[i]);
+      stage[1][i] =
+          integrationStageB(p_.integrator, i, c, w[i], n[0][i], n[1][i]);
     });
-    rightHandSide(stageB_, n3_);
+    rightHandSide(stage[1], n[2]);
   }
-  if (!n4_.empty()) {
+  if (!n[3].empty()) {
     forEachIndex(w.size(), [&](std::size_t i) {
-      stageC_[i] = integrationStageC(i, c, w[i], n1_[i], n3_[i]);
+      stage[2][i] = integrationStageC(i, c, w[i], n[0][i], n[2][i]);
     });
-    rightHandSide(stageC_, n4_);
+    rightHandSide(stage[2], n[3]);
   }
   forEachIndex(w.size(), [&](std::size_t i) {
-    w[i] = integrationFinish(p_.integrator, p_.timeStep, i, c, w[i], stageA_[i],
-                             n1_[i], n2_[i], n3_.empty() ? Complex{} : n3_[i],
-                             n4_.empty() ? Complex{} : n4_[i]);
+    w[i] = integrationFinish(
+        p_.integrator, p_.timeStep, i, c, w[i], stage[0][i], n[0][i], n[1][i],
+        n[2].empty() ? Complex{} : n[2][i], n[3].empty() ? Complex{} : n[3][i]);
     if (!noise_.empty())
       w[i] += noise_[i];
   });
   enforceStateConstraints(w, p_);
+}
+
+double Solver::writeFrame(RestartState &state, DiagnosticsAverages *averages) {
+  beginOutputTransaction(p_, state.frame);
+  const double energy = averages
+                            ? writeDiagnostics(p_, baseTransform_, state.time,
+                                               state.frame, state.wavefunction,
+                                               diagnosticNonlinear_, *averages)
+                            : 0.0;
+  writeWavefunction(p_, baseTransform_, state.wavefunction, state.frame);
+  std::ostringstream randomState, distributionState;
+  randomState << random_;
+  distributionState << normal_;
+  writeRestart(p_, state.time, state.frame, state.wavefunction,
+               randomState.str(), distributionState.str());
+  finishOutputTransaction(p_);
+  return energy;
 }
 
 void Solver::run() {
@@ -347,14 +351,7 @@ void Solver::run() {
                     waveActionInjectionCoefficient_,
                     quadraticEnergyInjectionCoefficient_);
     if (!state.restarting) {
-      beginOutputTransaction(p_, state.frame);
-      writeWavefunction(p_, baseTransform_, state.wavefunction, state.frame);
-      std::ostringstream randomState, distributionState;
-      randomState << random_;
-      distributionState << normal_;
-      writeRestart(p_, state.time, state.frame, state.wavefunction,
-                   randomState.str(), distributionState.str());
-      finishOutputTransaction(p_);
+      writeFrame(state, nullptr);
     }
     std::cout << "backend = " << backendName() << "\nnx = " << p_.nx
               << " ny = " << p_.ny << " timeStep = " << p_.timeStep
@@ -380,17 +377,7 @@ void Solver::run() {
         backend_->downloadState(state.wavefunction);
       backend_->evaluate(state.wavefunction, diagnosticNonlinear_);
       if (backendIsRoot()) {
-        beginOutputTransaction(p_, state.frame);
-        const double energy = writeDiagnostics(p_, baseTransform_, state.time,
-                                               state.frame, state.wavefunction,
-                                               diagnosticNonlinear_, averages);
-        writeWavefunction(p_, baseTransform_, state.wavefunction, state.frame);
-        std::ostringstream randomState, distributionState;
-        randomState << random_;
-        distributionState << normal_;
-        writeRestart(p_, state.time, state.frame, state.wavefunction,
-                     randomState.str(), distributionState.str());
-        finishOutputTransaction(p_);
+        const double energy = writeFrame(state, &averages);
         std::cout << "time = " << state.time << " file = " << state.frame
                   << " Energy = " << energy << '\n';
       }

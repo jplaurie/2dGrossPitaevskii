@@ -1,4 +1,5 @@
 #include "output.hpp"
+#include "io_utils.hpp"
 #include "spectral.hpp"
 
 #include <algorithm>
@@ -254,7 +255,8 @@ void prepareOutputFiles(const Parameters &p, bool restarting,
       "time,frame,total_energy,kinetic_energy,potential_energy,nonlinear_"
       "energy,"
       "wave_action,wave_action_dissipation_hypo,wave_action_dissipation_hyper,"
-      "quadratic_energy_dissipation_hypo,quadratic_energy_dissipation_hyper",
+      "quadratic_energy_dissipation_hypo,quadratic_energy_dissipation_hyper,"
+      "total_energy_dissipation_hypo,total_energy_dissipation_hyper",
       restarting, p.overwriteOutput);
   initializeCsv(
       p.outputDirectory / "spectra.csv",
@@ -262,11 +264,10 @@ void prepareOutputFiles(const Parameters &p, bool restarting,
       "segment_mean_wave_action_spectrum,segment_mean_quadratic_energy_"
       "spectrum",
       restarting, p.overwriteOutput);
-  initializeCsv(
-      p.outputDirectory / "fluxes.csv",
-      "time,frame,wavenumber,wave_action_flux,quadratic_energy_flux,"
-      "segment_mean_wave_action_flux,segment_mean_quadratic_energy_flux",
-      restarting, p.overwriteOutput);
+  initializeCsv(p.outputDirectory / "fluxes.csv",
+                "time,frame,wavenumber,wave_action_flux,full_energy_flux,"
+                "segment_mean_wave_action_flux,segment_mean_full_energy_flux",
+                restarting, p.overwriteOutput);
   if (p.writeModeDiagnostics)
     initializeCsv(p.outputDirectory / "modes.csv",
                   "time,frame,psi_1_0_real,psi_1_0_imag,psi_0_1_real,"
@@ -292,9 +293,7 @@ void writeWavefunction(const Parameters &p, BaseTransform &transform,
       out << (x + 1 == p.nx ? '\n' : ' ');
     }
   }
-  out.close();
-  if (!out)
-    throw std::runtime_error("failed while writing wavefunction snapshot");
+  closeChecked(out, "failed while writing wavefunction snapshot");
   std::filesystem::rename(temporary, path);
 }
 
@@ -307,15 +306,17 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
     avg.waveActionSpectrum.assign(bins, 0.0);
     avg.quadraticEnergySpectrum.assign(bins, 0.0);
     avg.waveActionFlux.assign(bins, 0.0);
-    avg.quadraticEnergyFlux.assign(bins, 0.0);
+    avg.fullEnergyFlux.assign(bins, 0.0);
   }
   std::vector<double> waveSpectrum(bins), quadraticSpectrum(bins),
       waveShell(bins), quadraticShell(bins);
+  SpectralField hamiltonianRate(w.size());
   const double area = p.lx() * p.ly();
   const double binWidth = std::min(2.0 * gpPi / p.lx(), 2.0 * gpPi / p.ly());
   double waveAction = 0.0, kineticEnergy = 0.0, potentialEnergy = 0.0;
   double waveHypo = 0.0, waveHyper = 0.0;
   double quadraticHypo = 0.0, quadraticHyper = 0.0;
+  double totalEnergyHypo = 0.0, totalEnergyHyper = 0.0;
   for (std::size_t y = 0; y < p.ny; ++y) {
     for (std::size_t x = 0; x < p.nx; ++x) {
       const std::size_t index = spectralIndex(x, y, p.nx);
@@ -342,35 +343,60 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
         throw std::logic_error("spectrum bin count is too small");
       waveSpectrum[bin] += area * n;
       quadraticSpectrum[bin] += area * weight * n;
+      const double gamma = ginzburgLandauFactor(p, k2);
+      const Complex conservativeNonlinear =
+          Complex(1.0, gamma) * nonlinear[index];
+      hamiltonianRate[index] =
+          Complex(0.0, -weight) * w[index] + conservativeNonlinear;
+      const Complex hamiltonianGradient =
+          weight * w[index] + Complex(0.0, 1.0) * conservativeNonlinear;
+      totalEnergyHyper += 2.0 * area * hyper *
+                          std::real(std::conj(hamiltonianGradient) * w[index]);
+      totalEnergyHypo += 2.0 * area * hypo *
+                         std::real(std::conj(hamiltonianGradient) * w[index]);
       const double transfer =
-          -2.0 * area * std::real(std::conj(w[index]) * nonlinear[index]);
+          -2.0 * area * std::real(std::conj(w[index]) * conservativeNonlinear);
       waveShell[bin] += transfer;
       quadraticShell[bin] += weight * transfer;
     }
   }
-  std::vector<Complex> physical;
-  transform.inverse(w, physical);
+  SpectralField square, conservativeSquareRate;
+  transform.projectedSquareSpectra(w, hamiltonianRate, square,
+                                   conservativeSquareRate);
+  // The two-pass cubic backend is the gradient of
+  // (g/2) * ||P(psi^2)||^2, where P retains the base spectral band.
+  // Using base-grid |psi|^4 here would describe a different Hamiltonian.
   double nonlinearEnergy = 0.0;
-  for (const Complex value : physical)
-    nonlinearEnergy += std::norm(value) * std::norm(value);
-  nonlinearEnergy *= area * p.nonlinearityCoefficient /
-                     (2.0 * static_cast<double>(p.nx * p.ny));
+  for (const Complex value : square)
+    nonlinearEnergy += std::norm(value);
+  nonlinearEnergy *= 0.5 * area * p.nonlinearityCoefficient;
   const double totalEnergy = kineticEnergy + potentialEnergy + nonlinearEnergy;
-  std::vector<double> waveFlux(bins), quadraticFlux(bins);
-  double cumulativeWave = 0.0, cumulativeQuadratic = 0.0;
-  for (std::size_t i = bins; i-- > 0;) {
+  std::vector<double> fullEnergyShell = quadraticShell;
+  for (std::size_t y = 0; y < p.ny; ++y)
+    for (std::size_t x = 0; x < p.nx; ++x) {
+      const std::size_t index = spectralIndex(x, y, p.nx);
+      const std::size_t bin = static_cast<std::size_t>(
+          std::sqrt(waveNumberSquared(p, x, y)) / binWidth);
+      fullEnergyShell[bin] -=
+          area * p.nonlinearityCoefficient *
+          std::real(std::conj(square[index]) * conservativeSquareRate[index]);
+    }
+  std::vector<double> waveFlux(bins), fullEnergyFlux(bins);
+  double cumulativeWave = 0.0, cumulativeEnergy = 0.0;
+  for (std::size_t i = 0; i < bins; ++i) {
     cumulativeWave += waveShell[i];
-    cumulativeQuadratic += quadraticShell[i];
+    cumulativeEnergy += fullEnergyShell[i];
     waveFlux[i] = cumulativeWave;
-    quadraticFlux[i] = cumulativeQuadratic;
+    fullEnergyFlux[i] = cumulativeEnergy;
   }
   const auto finiteVector = [](const std::vector<double> &values) {
     return std::all_of(values.begin(), values.end(),
                        [](double value) { return std::isfinite(value); });
   };
   if (!std::isfinite(totalEnergy) || !std::isfinite(waveAction) ||
+      !std::isfinite(totalEnergyHypo) || !std::isfinite(totalEnergyHyper) ||
       !finiteVector(waveSpectrum) || !finiteVector(quadraticSpectrum) ||
-      !finiteVector(waveFlux) || !finiteVector(quadraticFlux))
+      !finiteVector(waveFlux) || !finiteVector(fullEnergyFlux))
     throw std::runtime_error(
         "diagnostics became non-finite; reduce the time step or coefficients");
   ++avg.count;
@@ -378,7 +404,7 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
     avg.waveActionSpectrum[i] += waveSpectrum[i];
     avg.quadraticEnergySpectrum[i] += quadraticSpectrum[i];
     avg.waveActionFlux[i] += waveFlux[i];
-    avg.quadraticEnergyFlux[i] += quadraticFlux[i];
+    avg.fullEnergyFlux[i] += fullEnergyFlux[i];
   }
   auto diagnostics = numericOutput(p.outputDirectory / "diagnostics.csv",
                                    std::ios::out | std::ios::app);
@@ -386,10 +412,8 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
               << kineticEnergy << ',' << potentialEnergy << ','
               << nonlinearEnergy << ',' << waveAction << ',' << waveHypo << ','
               << waveHyper << ',' << quadraticHypo << ',' << quadraticHyper
-              << '\n';
-  diagnostics.close();
-  if (!diagnostics)
-    throw std::runtime_error("failed while writing diagnostics.csv");
+              << ',' << totalEnergyHypo << ',' << totalEnergyHyper << '\n';
+  closeChecked(diagnostics, "failed while writing diagnostics.csv");
   auto spectra = numericOutput(p.outputDirectory / "spectra.csv",
                                std::ios::out | std::ios::app);
   auto fluxes = numericOutput(p.outputDirectory / "fluxes.csv",
@@ -402,15 +426,12 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
             << avg.quadraticEnergySpectrum[i] / static_cast<double>(avg.count)
             << '\n';
     fluxes << time << ',' << frame << ',' << k << ',' << waveFlux[i] << ','
-           << quadraticFlux[i] << ','
+           << fullEnergyFlux[i] << ','
            << avg.waveActionFlux[i] / static_cast<double>(avg.count) << ','
-           << avg.quadraticEnergyFlux[i] / static_cast<double>(avg.count)
-           << '\n';
+           << avg.fullEnergyFlux[i] / static_cast<double>(avg.count) << '\n';
   }
-  spectra.close();
-  fluxes.close();
-  if (!spectra || !fluxes)
-    throw std::runtime_error("failed while writing spectra or fluxes CSV");
+  closeChecked(spectra, "failed while writing spectra.csv");
+  closeChecked(fluxes, "failed while writing fluxes.csv");
   if (p.writeModeDiagnostics) {
     auto modes = numericOutput(p.outputDirectory / "modes.csv",
                                std::ios::out | std::ios::app);
@@ -426,9 +447,7 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
       }
     }
     modes << '\n';
-    modes.close();
-    if (!modes)
-      throw std::runtime_error("failed while writing modes.csv");
+    closeChecked(modes, "failed while writing modes.csv");
   }
   return totalEnergy;
 }
@@ -466,9 +485,7 @@ void writeRestart(const Parameters &p, double time, std::uint64_t frame,
                      static_cast<std::streamsize>(2 * chunk * sizeof(double)));
     offset += chunk;
   }
-  checkpoint.close();
-  if (!checkpoint)
-    throw std::runtime_error("failed while writing spectral checkpoint");
+  closeChecked(checkpoint, "failed while writing spectral checkpoint");
   std::filesystem::rename(temporary, binaryPath);
   const auto metadata = p.dataDirectory / "restart_state.txt";
   const auto metadataTemporary = p.dataDirectory / "restart_state.tmp";
@@ -480,9 +497,7 @@ void writeRestart(const Parameters &p, double time, std::uint64_t frame,
       << p.aspectRatio << "\nrandomSeed " << p.randomSeed << "\nrandomEngine "
       << randomEngineState << "\nrandomDistribution " << randomDistributionState
       << '\n';
-  out.close();
-  if (!out)
-    throw std::runtime_error("cannot write restart metadata");
+  closeChecked(out, "cannot write restart metadata");
   std::filesystem::rename(metadataTemporary, metadata);
 }
 
@@ -509,9 +524,7 @@ void writeForcingFiles(const Parameters &p,
   else
     summary << ',';
   summary << '\n';
-  summary.close();
-  if (!summary)
-    throw std::runtime_error("failed while writing forcing_summary.csv");
+  closeChecked(summary, "failed while writing forcing_summary.csv");
   auto spectrum = numericOutput(p.outputDirectory / "forcing_spectrum.csv");
   spectrum << "kx,ky,amplitude\n";
   if (p.forcingEnabled)
@@ -524,7 +537,5 @@ void writeForcingFiles(const Parameters &p,
         spectrum << kx << ',' << ky << ','
                  << amplitude[spectralIndex(x, y, p.nx)] << '\n';
       }
-  spectrum.close();
-  if (!spectrum)
-    throw std::runtime_error("failed while writing forcing_spectrum.csv");
+  closeChecked(spectrum, "failed while writing forcing_spectrum.csv");
 }

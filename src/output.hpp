@@ -21,7 +21,7 @@ struct DiagnosticsAverages {
   std::vector<double> waveActionSpectrum;
   std::vector<double> quadraticEnergySpectrum;
   std::vector<double> waveActionFlux;
-  std::vector<double> quadraticEnergyFlux;
+  std::vector<double> fullEnergyFlux;
   std::size_t count = 0;
 };
 
