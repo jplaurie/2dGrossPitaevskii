@@ -25,9 +25,12 @@ __host__ __device__ inline cufftDoubleComplex operator*(double a,
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 static_assert(sizeof(Complex) == sizeof(cufftDoubleComplex));
@@ -43,6 +46,11 @@ void cufftCheck(cufftResult status, const char *operation) {
   if (status != CUFFT_SUCCESS)
     throw std::runtime_error(std::string(operation) + " failed (cuFFT status " +
                              std::to_string(static_cast<int>(status)) + ")");
+}
+
+bool environmentEnabled(const char *name) {
+  const char *value = std::getenv(name);
+  return value && value[0] != '\0' && std::string_view(value) != "0";
 }
 
 template <class T> class DeviceBuffer {
@@ -178,6 +186,15 @@ __global__ void addForcing(cufftDoubleComplex *rhs,
     rhs[i] = rhs[i] + forcing[i];
 }
 
+__global__ void scatterNoise(cufftDoubleComplex *noise,
+                             const cufftDoubleComplex *compactNoise,
+                             const std::size_t *indices, std::size_t count) {
+  const std::size_t i =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (i < count)
+    noise[indices[i]] = compactNoise[i];
+}
+
 struct DeviceStages {
   cufftDoubleComplex *n1{}, *n2{}, *n3{}, *n4{}, *a{}, *b{}, *c{};
 };
@@ -217,22 +234,52 @@ public:
   explicit CudaBackend(const Parameters &p)
       : p_(p), baseCount_(p.nx * p.ny), paddedCount_(p.mx() * p.my()),
         input_(baseCount_), result_(baseCount_), paddedHat_(paddedCount_),
-        psi_(paddedCount_), square_(paddedCount_), squareHat_(paddedCount_) {
+        psi_(paddedCount_), square_(paddedCount_), squareHat_(paddedCount_),
+        compactNoiseEnabled_(!environmentEnabled("GP2D_CUDA_FULL_NOISE")),
+        profileEnabled_(environmentEnabled("GP2D_CUDA_PROFILE")) {
     cufftCheck(cufftPlan2d(&plan_, static_cast<int>(p.my()),
                            static_cast<int>(p.mx()), CUFFT_Z2Z),
                "create dealiased transform plan");
+    if (profileEnabled_) {
+      cudaCheck(cudaEventCreate(&profileStart_), "create CUDA profile event");
+      cudaCheck(cudaEventCreate(&profileNoiseReady_),
+                "create CUDA noise profile event");
+      cudaCheck(cudaEventCreate(&profileEnd_), "create CUDA profile event");
+    }
   }
 
   ~CudaBackend() override {
+    if (profileEnabled_ && profileSteps_ > 0) {
+      const double averageStep = profileStepMilliseconds_ / profileSteps_;
+      const double averageNoise = profileNoiseMilliseconds_ / profileSteps_;
+      const double percentage =
+          profileStepMilliseconds_ > 0.0
+              ? 100.0 * profileNoiseMilliseconds_ / profileStepMilliseconds_
+              : 0.0;
+      std::cout << "CUDA profile: noise_mode="
+                << (compactNoiseEnabled_ ? "compact" : "full")
+                << " steps=" << profileSteps_
+                << " average_step_ms=" << averageStep
+                << " average_noise_prepare_ms=" << averageNoise
+                << " noise_percentage=" << percentage << '\n';
+    }
+    if (profileStart_)
+      cudaEventDestroy(profileStart_);
+    if (profileNoiseReady_)
+      cudaEventDestroy(profileNoiseReady_);
+    if (profileEnd_)
+      cudaEventDestroy(profileEnd_);
     if (plan_)
       cufftDestroy(plan_);
   }
 
   bool deviceTimeStepping() const override { return true; }
+  bool compactStochasticNoise() const override { return compactNoiseEnabled_; }
 
-  void initializeTimeStepping(const IntegrationCoefficients &coefficients,
-                              const SpectralField &forcing,
-                              const SpectralField &state) override {
+  void initializeTimeStepping(
+      const IntegrationCoefficients &coefficients, const SpectralField &forcing,
+      const SpectralField &state,
+      const std::vector<std::size_t> &noiseIndices) override {
     const auto hostFields = coefficients.fields();
     std::array<cufftDoubleComplex *, 10> pointers{};
     for (std::size_t i = 0; i < hostFields.size(); ++i) {
@@ -264,20 +311,52 @@ public:
                            cudaMemcpyHostToDevice),
                 "upload deterministic forcing");
     }
-    if (p_.forcingEnabled && p_.forcingProfile != ForcingProfile::singleMode)
+    if (p_.forcingEnabled && p_.forcingProfile != ForcingProfile::singleMode) {
       noise_.allocate(baseCount_);
+      if (compactNoiseEnabled_) {
+        if (noiseIndices.empty())
+          throw std::runtime_error("compact stochastic noise has no modes");
+        noiseIndices_.allocate(noiseIndices.size());
+        compactNoise_.allocate(noiseIndices.size());
+        cudaCheck(cudaMemcpy(noiseIndices_.data(), noiseIndices.data(),
+                             noiseIndices.size() * sizeof(std::size_t),
+                             cudaMemcpyHostToDevice),
+                  "upload stochastic-noise indices");
+        cudaCheck(cudaMemset(noise_.data(), 0,
+                             baseCount_ * sizeof(cufftDoubleComplex)),
+                  "initialize device stochastic increment");
+      }
+    }
     uploadState(state);
   }
 
   void advance(const SpectralField &noise) override {
+    if (profileEnabled_)
+      cudaCheck(cudaEventRecord(profileStart_), "record CUDA profile start");
     if (!noise.empty()) {
-      if (noise.size() != baseCount_ || !noise_.data())
+      const std::size_t expectedSize =
+          compactNoiseEnabled_ ? noiseIndices_.size() : baseCount_;
+      if (noise.size() != expectedSize || !noise_.data())
         throw std::runtime_error("invalid device noise field");
-      cudaCheck(cudaMemcpy(noise_.data(), noise.data(),
-                           baseCount_ * sizeof(Complex),
-                           cudaMemcpyHostToDevice),
-                "upload stochastic increment");
+      if (compactNoiseEnabled_) {
+        cudaCheck(cudaMemcpyAsync(compactNoise_.data(), noise.data(),
+                                  noise.size() * sizeof(Complex),
+                                  cudaMemcpyHostToDevice),
+                  "upload compact stochastic increment");
+        scatterNoise<<<blocks(noise.size()), threads>>>(
+            noise_.data(), compactNoise_.data(), noiseIndices_.data(),
+            noise.size());
+        cudaCheck(cudaGetLastError(), "scatter device stochastic increment");
+      } else {
+        cudaCheck(cudaMemcpyAsync(noise_.data(), noise.data(),
+                                  baseCount_ * sizeof(Complex),
+                                  cudaMemcpyHostToDevice),
+                  "upload stochastic increment");
+      }
     }
+    if (profileEnabled_)
+      cudaCheck(cudaEventRecord(profileNoiseReady_),
+                "record CUDA noise profile event");
     rightHandSide(input_.data(), stages_.n1);
     launchStage(0);
     rightHandSide(stages_.a, stages_.n2);
@@ -293,6 +372,21 @@ public:
     if (p_.hypoviscosity > 0.0 && p_.hypoviscosityOrder < 0.0) {
       suppressZeroMode<<<1, 1>>>(input_.data());
       cudaCheck(cudaGetLastError(), "suppress device zero mode");
+    }
+    if (profileEnabled_) {
+      cudaCheck(cudaEventRecord(profileEnd_), "record CUDA profile end");
+      cudaCheck(cudaEventSynchronize(profileEnd_),
+                "synchronize CUDA profile event");
+      float stepMilliseconds = 0.0F, noiseMilliseconds = 0.0F;
+      cudaCheck(
+          cudaEventElapsedTime(&stepMilliseconds, profileStart_, profileEnd_),
+          "measure CUDA step time");
+      cudaCheck(cudaEventElapsedTime(&noiseMilliseconds, profileStart_,
+                                     profileNoiseReady_),
+                "measure CUDA noise time");
+      profileStepMilliseconds_ += stepMilliseconds;
+      profileNoiseMilliseconds_ += noiseMilliseconds;
+      ++profileSteps_;
     }
   }
 
@@ -383,9 +477,15 @@ private:
       squareHat_;
   std::array<DeviceBuffer<cufftDoubleComplex>, 10> coefficientBuffers_;
   std::array<DeviceBuffer<cufftDoubleComplex>, 7> stageBuffers_;
-  DeviceBuffer<cufftDoubleComplex> forcing_, noise_;
+  DeviceBuffer<cufftDoubleComplex> forcing_, noise_, compactNoise_;
+  DeviceBuffer<std::size_t> noiseIndices_;
   CoefficientPointers<cufftDoubleComplex> coefficients_;
   DeviceStages stages_;
+  bool compactNoiseEnabled_ = true, profileEnabled_ = false;
+  cudaEvent_t profileStart_ = nullptr, profileNoiseReady_ = nullptr,
+              profileEnd_ = nullptr;
+  std::uint64_t profileSteps_ = 0;
+  double profileStepMilliseconds_ = 0.0, profileNoiseMilliseconds_ = 0.0;
   cufftHandle plan_ = 0;
 };
 } // namespace

@@ -56,6 +56,10 @@ def mode(values, nx, x, y):
     return complex(values[offset], values[offset + 1])
 
 
+def signed_wave(index, count):
+    return index if index <= (count - 1) // 2 else index - count
+
+
 def initial_field(path, nx, ny):
     with path.open("w") as stream:
         for y in range(ny):
@@ -79,6 +83,38 @@ def cpu_checks(root, cpu):
     assert [row["frame"] for row in rows] == ["1", "2"]
     assert all(math.isfinite(float(row["total_energy"])) for row in rows)
     assert "kinetic_energy" in rows[0]
+    assert all(math.isfinite(float(row["expected_full_energy_injection"]))
+               for row in rows)
+    values = checkpoint(full, 1)
+    nx, ny, aspect = 12, 14, 1.5
+    minimum_x, maximum_x = -(nx // 2), (nx - 1) // 2
+    minimum_y, maximum_y = -(ny // 2), (ny - 1) // 2
+    forcing = {}
+    quadratic_injection = 0.0
+    for y in range(ny):
+        wave_y = signed_wave(y, ny)
+        for x in range(nx):
+            wave_x = signed_wave(x, nx)
+            k2 = (wave_x / aspect) ** 2 + wave_y ** 2
+            amplitude = (.01 if math.sqrt(k2) > 0 and
+                         abs(math.sqrt(k2) - 2) < .7 else 0)
+            forcing[wave_x, wave_y] = amplitude
+            quadratic_injection += (k2 + .1) * amplitude ** 2
+    quartic_injection = 0.0
+    for qy in range(minimum_y, maximum_y + 1):
+        for qx in range(minimum_x, maximum_x + 1):
+            for (jx, jy), amplitude in forcing.items():
+                ix, iy = qx - jx, qy - jy
+                if (minimum_x <= ix <= maximum_x and
+                        minimum_y <= iy <= maximum_y):
+                    x = ix if ix >= 0 else nx + ix
+                    y = iy if iy >= 0 else ny + iy
+                    quartic_injection += amplitude ** 2 * abs(
+                        mode(values, nx, x, y)) ** 2
+    area = 1.5 * (2 * math.pi) ** 2
+    expected_injection = area * (quadratic_injection + 4 * quartic_injection)
+    assert math.isclose(float(rows[0]["expected_full_energy_injection"]),
+                        expected_injection, rel_tol=2e-11)
     for quantity in ("total_energy_dissipation_hypo",
                      "total_energy_dissipation_hyper"):
         assert all(math.isfinite(float(row[quantity])) for row in rows)
@@ -116,6 +152,7 @@ def cpu_checks(root, cpu):
     run(cpu, damping_params)
     with (damping / "output/diagnostics.csv").open() as stream:
         damping_row = next(csv.DictReader(stream))
+    assert float(damping_row["expected_full_energy_injection"]) == 0
     amplitude = mode(checkpoint(damping, 1), 12, 0, 0)
     density = abs(amplitude) ** 2
     area = 1.5 * (2 * math.pi) ** 2

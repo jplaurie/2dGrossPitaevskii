@@ -63,8 +63,12 @@ Solver::Solver(Parameters p, std::unique_ptr<NonlinearBackend> backend)
   buildLinearOperator();
   buildIntegrationCoefficients();
   SpectralField{}.swap(linear_);
-  if (p_.forcingEnabled)
+  if (p_.forcingEnabled) {
     buildForcing();
+    if (backend_->compactStochasticNoise() &&
+        p_.forcingProfile != ForcingProfile::singleMode)
+      noise_.resize(forcedIndices_.size());
+  }
 }
 
 void Solver::buildLinearOperator() {
@@ -233,6 +237,50 @@ void Solver::buildForcing() {
     waveActionInjectionCoefficient_ *= scale * scale;
     quadraticEnergyInjectionCoefficient_ *= scale * scale;
   }
+  if (p_.forcingProfile != ForcingProfile::singleMode &&
+      p_.nonlinearityCoefficient != 0.0) {
+    const long minimumX = -static_cast<long>(p_.nx / 2);
+    const long maximumX = static_cast<long>((p_.nx - 1) / 2);
+    const long minimumY = -static_cast<long>(p_.ny / 2);
+    const long maximumY = static_cast<long>((p_.ny - 1) / 2);
+    const std::size_t stride = p_.nx + 1;
+    std::vector<double> prefix((p_.ny + 1) * stride, 0.0);
+    for (std::size_t y = 0; y < p_.ny; ++y)
+      for (std::size_t x = 0; x < p_.nx; ++x) {
+        const std::size_t centeredX =
+            static_cast<std::size_t>(signedWave(x, p_.nx) - minimumX);
+        const std::size_t centeredY =
+            static_cast<std::size_t>(signedWave(y, p_.ny) - minimumY);
+        const double amplitude = forcingAmplitude_[spectralIndex(x, y, p_.nx)];
+        prefix[(centeredY + 1) * stride + centeredX + 1] =
+            amplitude * amplitude;
+      }
+    for (std::size_t y = 0; y < p_.ny; ++y)
+      for (std::size_t x = 0; x < p_.nx; ++x) {
+        const std::size_t i = (y + 1) * stride + x + 1;
+        prefix[i] +=
+            prefix[i - 1] + prefix[i - stride] - prefix[i - stride - 1];
+      }
+    stochasticQuarticInjectionWeight_.resize(p_.nx * p_.ny);
+    for (std::size_t y = 0; y < p_.ny; ++y)
+      for (std::size_t x = 0; x < p_.nx; ++x) {
+        const long waveX = signedWave(x, p_.nx);
+        const long waveY = signedWave(y, p_.ny);
+        const long firstX = std::max(minimumX, minimumX - waveX);
+        const long lastX = std::min(maximumX, maximumX - waveX);
+        const long firstY = std::max(minimumY, minimumY - waveY);
+        const long lastY = std::min(maximumY, maximumY - waveY);
+        const std::size_t x0 = static_cast<std::size_t>(firstX - minimumX);
+        const std::size_t x1 = static_cast<std::size_t>(lastX - minimumX + 1);
+        const std::size_t y0 = static_cast<std::size_t>(firstY - minimumY);
+        const std::size_t y1 = static_cast<std::size_t>(lastY - minimumY + 1);
+        const double acceptedForcingPower =
+            prefix[y1 * stride + x1] - prefix[y0 * stride + x1] -
+            prefix[y1 * stride + x0] + prefix[y0 * stride + x0];
+        stochasticQuarticInjectionWeight_[spectralIndex(x, y, p_.nx)] =
+            2.0 * p_.nonlinearityCoefficient * acceptedForcingPower;
+      }
+  }
   if (!deterministicForcing_.empty())
     forEachIndex(deterministicForcing_.size(), [&](std::size_t i) {
       deterministicForcing_[i] = forcingAmplitude_[i];
@@ -246,11 +294,21 @@ void Solver::buildForcing() {
 }
 
 void Solver::generateNoise(SpectralField &noise) {
-  std::fill(noise.begin(), noise.end(), Complex{});
+  const bool compact = backend_->compactStochasticNoise();
+  if (compact) {
+    if (noise.size() != forcedIndices_.size())
+      throw std::logic_error("invalid compact stochastic-noise buffer");
+  } else {
+    std::fill(noise.begin(), noise.end(), Complex{});
+  }
   constexpr double circularScale = 0.7071067811865475244;
-  for (const std::size_t i : forcedIndices_)
-    noise[i] = forcingAmplitude_[i] * circularScale * noiseScale_[i] *
-               Complex(normal_(random_), normal_(random_));
+  for (std::size_t position = 0; position < forcedIndices_.size(); ++position) {
+    const std::size_t i = forcedIndices_[position];
+    const Complex value = forcingAmplitude_[i] * circularScale *
+                          noiseScale_[i] *
+                          Complex(normal_(random_), normal_(random_));
+    noise[compact ? position : i] = value;
+  }
 }
 
 void Solver::rightHandSide(const SpectralField &input, SpectralField &output) {
@@ -301,11 +359,12 @@ void Solver::step(SpectralField &w) {
 
 double Solver::writeFrame(RestartState &state, DiagnosticsAverages *averages) {
   beginOutputTransaction(p_, state.frame);
-  const double energy = averages
-                            ? writeDiagnostics(p_, baseTransform_, state.time,
-                                               state.frame, state.wavefunction,
-                                               diagnosticNonlinear_, *averages)
-                            : 0.0;
+  const double energy =
+      averages ? writeDiagnostics(p_, baseTransform_, state.time, state.frame,
+                                  state.wavefunction, diagnosticNonlinear_,
+                                  forcingAmplitude_,
+                                  stochasticQuarticInjectionWeight_, *averages)
+               : 0.0;
   writeWavefunction(p_, baseTransform_, state.wavefunction, state.frame);
   std::ostringstream randomState, distributionState;
   randomState << random_;
@@ -361,7 +420,7 @@ void Solver::run() {
   }
   if (backend_->deviceTimeStepping()) {
     backend_->initializeTimeStepping(coefficients_, deterministicForcing_,
-                                     state.wavefunction);
+                                     state.wavefunction, forcedIndices_);
     coefficients_ = {};
   }
   DiagnosticsAverages averages;

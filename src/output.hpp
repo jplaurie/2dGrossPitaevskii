@@ -45,6 +45,9 @@ double writeDiagnostics(const Parameters &parameters, BaseTransform &transform,
                         double time, std::uint64_t frame,
                         const SpectralField &wavefunction,
                         const SpectralField &nonlinear,
+                        const std::vector<double> &forcingAmplitude,
+                        const std::vector<double>
+                            &stochasticQuarticInjectionWeight,
                         DiagnosticsAverages &averages);
 void writeRestart(const Parameters &parameters, double time,
                   std::uint64_t frame, const SpectralField &wavefunction,

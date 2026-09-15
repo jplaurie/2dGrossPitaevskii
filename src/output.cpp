@@ -256,7 +256,8 @@ void prepareOutputFiles(const Parameters &p, bool restarting,
       "energy,"
       "wave_action,wave_action_dissipation_hypo,wave_action_dissipation_hyper,"
       "quadratic_energy_dissipation_hypo,quadratic_energy_dissipation_hyper,"
-      "total_energy_dissipation_hypo,total_energy_dissipation_hyper",
+      "total_energy_dissipation_hypo,total_energy_dissipation_hyper,"
+      "expected_full_energy_injection",
       restarting, p.overwriteOutput);
   initializeCsv(
       p.outputDirectory / "spectra.csv",
@@ -300,7 +301,14 @@ void writeWavefunction(const Parameters &p, BaseTransform &transform,
 double writeDiagnostics(const Parameters &p, BaseTransform &transform,
                         double time, std::uint64_t frame,
                         const SpectralField &w, const SpectralField &nonlinear,
+                        const std::vector<double> &forcingAmplitude,
+                        const std::vector<double>
+                            &stochasticQuarticInjectionWeight,
                         DiagnosticsAverages &avg) {
+  if (forcingAmplitude.size() != w.size() ||
+      (!stochasticQuarticInjectionWeight.empty() &&
+       stochasticQuarticInjectionWeight.size() != w.size()))
+    throw std::runtime_error("invalid forcing diagnostics size");
   const std::size_t bins = p.spectrumBins();
   if (avg.waveActionSpectrum.empty()) {
     avg.waveActionSpectrum.assign(bins, 0.0);
@@ -317,6 +325,11 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
   double waveHypo = 0.0, waveHyper = 0.0;
   double quadraticHypo = 0.0, quadraticHyper = 0.0;
   double totalEnergyHypo = 0.0, totalEnergyHyper = 0.0;
+  double expectedFullEnergyInjection = 0.0;
+  const bool stochasticForcing =
+      p.forcingEnabled && p.forcingProfile != ForcingProfile::singleMode;
+  const bool deterministicForcing =
+      p.forcingEnabled && p.forcingProfile == ForcingProfile::singleMode;
   for (std::size_t y = 0; y < p.ny; ++y) {
     for (std::size_t x = 0; x < p.nx; ++x) {
       const std::size_t index = spectralIndex(x, y, p.nx);
@@ -350,6 +363,17 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
           Complex(0.0, -weight) * w[index] + conservativeNonlinear;
       const Complex hamiltonianGradient =
           weight * w[index] + Complex(0.0, 1.0) * conservativeNonlinear;
+      if (stochasticForcing) {
+        const double amplitude = forcingAmplitude[index];
+        expectedFullEnergyInjection += area * weight * amplitude * amplitude;
+        if (!stochasticQuarticInjectionWeight.empty())
+          expectedFullEnergyInjection +=
+              area * stochasticQuarticInjectionWeight[index] * n;
+      } else if (deterministicForcing) {
+        expectedFullEnergyInjection +=
+            2.0 * area *
+            std::real(std::conj(hamiltonianGradient) * forcingAmplitude[index]);
+      }
       totalEnergyHyper += 2.0 * area * hyper *
                           std::real(std::conj(hamiltonianGradient) * w[index]);
       totalEnergyHypo += 2.0 * area * hypo *
@@ -395,6 +419,7 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
   };
   if (!std::isfinite(totalEnergy) || !std::isfinite(waveAction) ||
       !std::isfinite(totalEnergyHypo) || !std::isfinite(totalEnergyHyper) ||
+      !std::isfinite(expectedFullEnergyInjection) ||
       !finiteVector(waveSpectrum) || !finiteVector(quadraticSpectrum) ||
       !finiteVector(waveFlux) || !finiteVector(fullEnergyFlux))
     throw std::runtime_error(
@@ -412,7 +437,8 @@ double writeDiagnostics(const Parameters &p, BaseTransform &transform,
               << kineticEnergy << ',' << potentialEnergy << ','
               << nonlinearEnergy << ',' << waveAction << ',' << waveHypo << ','
               << waveHyper << ',' << quadraticHypo << ',' << quadraticHyper
-              << ',' << totalEnergyHypo << ',' << totalEnergyHyper << '\n';
+              << ',' << totalEnergyHypo << ',' << totalEnergyHyper << ','
+              << expectedFullEnergyInjection << '\n';
   closeChecked(diagnostics, "failed while writing diagnostics.csv");
   auto spectra = numericOutput(p.outputDirectory / "spectra.csv",
                                std::ios::out | std::ios::app);

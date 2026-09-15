@@ -33,6 +33,7 @@ private:
   std::array<SpectralField, 3> stageStates_;
   SpectralField diagnosticNonlinear_, deterministicForcing_;
   std::vector<double> forcingAmplitude_, noiseScale_;
+  std::vector<double> stochasticQuarticInjectionWeight_;
   std::vector<std::size_t> forcedIndices_;
   std::size_t forcedModeCount_ = 0;
   double waveActionInjectionCoefficient_ = 0.0;

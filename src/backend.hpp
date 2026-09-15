@@ -18,9 +18,11 @@ public:
   virtual void evaluate(const SpectralField &wavefunction,
                         SpectralField &result) = 0;
   [[nodiscard]] virtual bool deviceTimeStepping() const { return false; }
+  [[nodiscard]] virtual bool compactStochasticNoise() const { return false; }
   virtual void initializeTimeStepping(const IntegrationCoefficients &,
                                       const SpectralField &,
-                                      const SpectralField &) {
+                                      const SpectralField &,
+                                      const std::vector<std::size_t> &) {
     throw std::logic_error("backend has no device time integrator");
   }
   virtual void advance(const SpectralField &) {

@@ -125,7 +125,11 @@ mpirun -n 2 ./build/release/gross_pitaevskii_mpi run.params
 the OpenMP runtime default, including `OMP_NUM_THREADS` when it is set. For
 MPI, plan for `ranks * threadCount` CPU cores. Only rank zero writes files.
 CUDA keeps time-integration stages and nonlinear FFTs on the device; host
-transfers occur for stochastic increments and output.
+transfers occur for output. Stochastic increments retain the shared host RNG
+sequence but upload only forced-mode values before being scattered on the
+device. Set `GP2D_CUDA_PROFILE=1` to report average GPU step and noise
+preparation times. `GP2D_CUDA_FULL_NOISE=1` restores the full-field transfer
+for performance comparisons.
 
 ## Parameter files
 
@@ -202,7 +206,10 @@ transfers and uses the legacy low-wavenumber cumulative convention. The
 `total_energy_dissipation_hypo` and
 `total_energy_dissipation_hyper` columns include each operator's effect on
 both the quadratic and quartic Hamiltonian energy; the similarly named
-`quadratic_energy_*` columns retain the quadratic-only values.
+`quadratic_energy_*` columns retain the quadratic-only values. The
+`expected_full_energy_injection` column is the instantaneous expected forcing
+rate for the full Hamiltonian, including the state-dependent quartic Ito
+contribution for stochastic forcing.
 
 When `restart_state.txt` exists, the solver resumes automatically.
 `numberOfSteps` means additional steps, CSV files append, and frame numbering
