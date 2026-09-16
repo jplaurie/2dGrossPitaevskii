@@ -220,6 +220,16 @@ Use new data and output directories for an independent run. Existing restart
 metadata always resumes that run; `overwriteOutput` only permits replacement
 of colliding output files.
 
+## Plotting and movies
+
+The [`scripts/`](scripts/) directory contains Jupyter notebooks for physical
+wavefunction maps, spectra, fluxes, and time diagnostics, plus command-line
+movie generators for the same data.  The notebooks support individual frames,
+multiple frames, and frame averages and write publication-ready PDF figures
+using Matplotlib and LaTeX.  Movie output can use H.264 or H.265/HEVC through
+ffmpeg.  See [`scripts/README.md`](scripts/README.md) for configuration and
+examples.
+
 ## Code structure
 
 ```text

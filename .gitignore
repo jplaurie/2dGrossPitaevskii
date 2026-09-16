@@ -1,6 +1,7 @@
 /build/
 /data/
 /output/
+/figures/
 *.o
 *.swp
 __pycache__/
