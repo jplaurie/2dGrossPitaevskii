@@ -25,12 +25,13 @@ periodic domain $L_x=2\pi A_r$, $L_y=2\pi$, where $A_r$ is
 `aspectRatio`. Its complete Fourier-space equation is
 
 ```math
-\partial_t\widehat\psi_{\boldsymbol{k}}
+\partial_t\widehat{\psi}_{\boldsymbol{k}}
 =\frac{
-  \left(-c|\boldsymbol{k}|^2+\mu\right)\widehat\psi_{\boldsymbol{k}}
+  \left(-c\lvert\boldsymbol{k}\rvert^2+\mu\right)
+  \widehat{\psi}_{\boldsymbol{k}}
   +g\,\widehat{|\psi|^2\psi}_{\boldsymbol{k}}
 }{i-\Gamma_{\boldsymbol{k}}}
--D_{\boldsymbol{k}}\widehat\psi_{\boldsymbol{k}}
+-D_{\boldsymbol{k}}\widehat{\psi}_{\boldsymbol{k}}
 +F_{\boldsymbol{k}}(t).
 ```
 
@@ -45,17 +46,17 @@ i\,\partial_t\psi
 The corresponding conserved wave action and Hamiltonian are
 
 ```math
-\mathcal N=\int_\Omega|\psi|^2\,d^2x,
+\mathcal{N}=\int_\Omega\lvert\psi\rvert^2\,d^2x,
 \qquad
-H=\int_\Omega\left[-c|\nabla\psi|^2
-+\mu|\psi|^2+\frac{g}{2}|\psi|^4\right]d^2x.
+H=\int_\Omega\left[-c\lvert\nabla\psi\rvert^2
++\mu\lvert\psi\rvert^2+\frac{g}{2}\lvert\psi\rvert^4\right]d^2x.
 ```
 
 The optional Ginzburg–Landau factor is
 
 ```math
 \Gamma_{\boldsymbol{k}}
-=\Gamma\,\mathbf 1_{\{|\boldsymbol{k}|>k_\Gamma\}},
+=\Gamma\,\mathbf{1}_{\{\lvert\boldsymbol{k}\rvert>k_\Gamma\}},
 ```
 
 where $\Gamma$ and $k_\Gamma$ are `ginzburgLandauDamping` and
@@ -63,8 +64,8 @@ where $\Gamma$ and $k_\Gamma$ are `ginzburgLandauDamping` and
 
 ```math
 D_{\boldsymbol{k}}
-=\nu|\boldsymbol{k}|^{2p}\,C_\nu(\boldsymbol{k})
-+\alpha|\boldsymbol{k}|^{2q}\,C_\alpha(\boldsymbol{k}),
+=\nu\lvert\boldsymbol{k}\rvert^{2p}\,C_\nu(\boldsymbol{k})
++\alpha\lvert\boldsymbol{k}\rvert^{2q}\,C_\alpha(\boldsymbol{k}),
 ```
 
 where $(\nu,p)$ are `hyperviscosity` and `hyperviscosityOrder`, while
@@ -73,9 +74,9 @@ cutoff factors $C_\nu=C_\alpha=1$. If the corresponding cutoff flag is
 enabled,
 
 ```math
-C_\nu=\mathbf 1_{\{|\boldsymbol{k}|>k_\nu\}},
+C_\nu=\mathbf{1}_{\{\lvert\boldsymbol{k}\rvert>k_\nu\}},
 \qquad
-C_\alpha=\mathbf 1_{\{|\boldsymbol{k}|<k_\alpha\}},
+C_\alpha=\mathbf{1}_{\{\lvert\boldsymbol{k}\rvert<k_\alpha\}},
 ```
 
 with `hyperviscosityCutoff` $=k_\nu$ and `hypoviscosityCutoff`
@@ -87,12 +88,12 @@ suppressed.
 For every stochastic profile the forcing term means
 
 ```math
-d\widehat\psi_{\boldsymbol{k}}\big|_{\mathrm{force}}
-=f(|\boldsymbol{k}|)\,dW_{\boldsymbol{k}},
+d\widehat{\psi}_{\boldsymbol{k}}\big\rvert_{\mathrm{force}}
+=f(\lvert\boldsymbol{k}\rvert)\,dW_{\boldsymbol{k}},
 \qquad
-\mathbb E[dW_{\boldsymbol{k}}]=0,
+\mathbb{E}[dW_{\boldsymbol{k}}]=0,
 \qquad
-\mathbb E[dW_{\boldsymbol{k}}dW_{\boldsymbol{k}'}^*]
+\mathbb{E}[dW_{\boldsymbol{k}}dW_{\boldsymbol{k}'}^*]
 =\delta_{\boldsymbol{k}\boldsymbol{k}'}\,dt,
 ```
 
@@ -102,7 +103,7 @@ are
 ```math
 \begin{aligned}
 f_{\mathrm{annulus}}(k)
-  &=A\,\mathbf 1_{\{|k-k_f|<\Delta k\}},\\
+  &=A\,\mathbf{1}_{\{\lvert k-k_f\rvert<\Delta k\}},\\
 f_{\mathrm{gaussian}}(k)
   &=A\exp\!\left[-\frac12\left(\frac{k-k_f}{\sigma_f}\right)^2\right],\\
 f_{\mathrm{exponential}}(k)
