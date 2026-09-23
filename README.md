@@ -18,23 +18,121 @@ fixed-step exponential or integrating-factor schemes, reproducible stochastic
 forcing, atomic checkpoints, automatic restart, and cross-backend regression
 tests.
 
-## Equation and discretization
+## Equation, forcing, and dissipation
 
-The solver evolves normalized Fourier coefficients of the complex field
-`psi` on `Lx = 2*pi*aspectRatio`, `Ly = 2*pi`:
+The solver evolves a complex field $\psi(\boldsymbol{x},t)$ on the doubly
+periodic domain $L_x=2\pi A_r$, $L_y=2\pi$, where $A_r$ is
+`aspectRatio`. Its complete Fourier-space equation is
 
 ```math
-\partial_t\psi_k =
-\frac{(-c|k|^2+\mu)\psi_k+g\,\widehat{|\psi|^2\psi}_k}
-     {i-\Gamma_k}
--\left[\nu |k|^{2p}+\alpha |k|^{2q}\right]\psi_k+F_k.
+\partial_t\widehat\psi_{\boldsymbol{k}}
+=\frac{
+  \left(-c|\boldsymbol{k}|^2+\mu\right)\widehat\psi_{\boldsymbol{k}}
+  +g\,\widehat{|\psi|^2\psi}_{\boldsymbol{k}}
+}{i-\Gamma_{\boldsymbol{k}}}
+-D_{\boldsymbol{k}}\widehat\psi_{\boldsymbol{k}}
++F_{\boldsymbol{k}}(t).
 ```
 
-Here `c`, `g`, and `mu` are `dispersionCoefficient`,
-`nonlinearityCoefficient`, and `chemicalPotential`. The optional
-Ginzburg–Landau coefficient `Gamma_k` is applied above its configured cutoff.
-Hyper- and hypoviscosity can each optionally be limited to one side of a
-wavenumber cutoff.
+With Ginzburg–Landau damping, spectral damping, and forcing disabled, this is
+the standard Gross–Pitaevskii/nonlinear Schrödinger equation
+
+```math
+i\,\partial_t\psi
+=c\,\Delta\psi+g|\psi|^2\psi+\mu\psi.
+```
+
+The corresponding conserved wave action and Hamiltonian are
+
+```math
+\mathcal N=\int_\Omega|\psi|^2\,d^2x,
+\qquad
+H=\int_\Omega\left[-c|\nabla\psi|^2
++\mu|\psi|^2+\frac{g}{2}|\psi|^4\right]d^2x.
+```
+
+The optional Ginzburg–Landau factor is
+
+```math
+\Gamma_{\boldsymbol{k}}
+=\Gamma\,\mathbf 1_{\{|\boldsymbol{k}|>k_\Gamma\}},
+```
+
+where $\Gamma$ and $k_\Gamma$ are `ginzburgLandauDamping` and
+`ginzburgLandauCutoff`. The separately applied spectral damping rate is
+
+```math
+D_{\boldsymbol{k}}
+=\nu|\boldsymbol{k}|^{2p}\,C_\nu(\boldsymbol{k})
++\alpha|\boldsymbol{k}|^{2q}\,C_\alpha(\boldsymbol{k}),
+```
+
+where $(\nu,p)$ are `hyperviscosity` and `hyperviscosityOrder`, while
+$(\alpha,q)$ are `hypoviscosity` and `hypoviscosityOrder`. By default the
+cutoff factors $C_\nu=C_\alpha=1$. If the corresponding cutoff flag is
+enabled,
+
+```math
+C_\nu=\mathbf 1_{\{|\boldsymbol{k}|>k_\nu\}},
+\qquad
+C_\alpha=\mathbf 1_{\{|\boldsymbol{k}|<k_\alpha\}},
+```
+
+with `hyperviscosityCutoff` $=k_\nu$ and `hypoviscosityCutoff`
+$=k_\alpha$. For a negative $q$, the singular zero mode is explicitly
+suppressed.
+
+### Forcing profiles
+
+For every stochastic profile the forcing term means
+
+```math
+d\widehat\psi_{\boldsymbol{k}}\big|_{\mathrm{force}}
+=f(|\boldsymbol{k}|)\,dW_{\boldsymbol{k}},
+\qquad
+\mathbb E[dW_{\boldsymbol{k}}]=0,
+\qquad
+\mathbb E[dW_{\boldsymbol{k}}dW_{\boldsymbol{k}'}^*]
+=\delta_{\boldsymbol{k}\boldsymbol{k}'}\,dt,
+```
+
+with independent circular complex Wiener processes. The selectable envelopes
+are
+
+```math
+\begin{aligned}
+f_{\mathrm{annulus}}(k)
+  &=A\,\mathbf 1_{\{|k-k_f|<\Delta k\}},\\
+f_{\mathrm{gaussian}}(k)
+  &=A\exp\!\left[-\frac12\left(\frac{k-k_f}{\sigma_f}\right)^2\right],\\
+f_{\mathrm{exponential}}(k)
+  &=A\left(\frac{k}{k_f}\right)^s
+    \exp\!\left[-\left(\frac{k}{k_f}\right)^s\right],\\
+f_{\mathrm{logNormal}}(k)
+  &=A\exp\!\left[-\frac12
+    \left(\frac{\log(k/k_f)}{\sigma_{\log}}\right)^2\right].
+\end{aligned}
+```
+
+The parameters $A,k_f,\Delta k=\sigma_f,s,\sigma_{\log}$ are
+`forcingAmplitude`, `forcingWavenumber`, `forcingWidth`,
+`forcingShapeOrder`, and `forcingLogWidth`. A positive
+`targetWaveActionInjectionRate` rescales the stochastic amplitudes.
+`singleMode` is instead deterministic: it applies amplitude $A$ at the four
+Fourier-index pairs $(m_x,m_y)=(\pm m,\pm m)$, with
+$m=\texttt{forcingWavenumber}$.
+
+### Parameter-symbol map and discretization
+
+| Symbol | Parameter key | Meaning |
+| --- | --- | --- |
+| $N_x,N_y$ | `nx`, `ny` | Physical-grid dimensions |
+| $A_r$ | `aspectRatio` | Domain aspect ratio $L_x/L_y$ |
+| $\Delta t$ | `timeStep` | Fixed timestep |
+| $c,g,\mu$ | `dispersionCoefficient`, `nonlinearityCoefficient`, `chemicalPotential` | Conservative equation coefficients |
+| $\Gamma,k_\Gamma$ | `ginzburgLandauDamping`, `ginzburgLandauCutoff` | Ginzburg–Landau damping and onset |
+| $\nu,p,k_\nu$ | `hyperviscosity`, `hyperviscosityOrder`, `hyperviscosityCutoff` | Small-scale damping |
+| $\alpha,q,k_\alpha$ | `hypoviscosity`, `hypoviscosityOrder`, `hypoviscosityCutoff` | Large-scale damping |
 
 The cubic term uses a two-pass 3/2-rule treatment:
 `psi` is embedded on the padded grid, `psi^2` is transformed and truncated to
