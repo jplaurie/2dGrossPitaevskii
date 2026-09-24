@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata in this file."
+title: "2D Gross–Pitaevskii pseudo-spectral solver"
+type: software
+authors:
+  - family-names: Laurie
+    given-names: Jason
+    orcid: "https://orcid.org/0000-0002-3621-6052"
+abstract: "A C++20 pseudo-spectral solver for the two-dimensional Gross–Pitaevskii equation with CPU, MPI, and CUDA backends."
+repository-code: "https://github.com/jplaurie/2dGrossPitaevskii"
+url: "https://github.com/jplaurie/2dGrossPitaevskii"
+license: BSD-3-Clause
+keywords:
+  - Gross–Pitaevskii equation
+  - nonlinear Schrödinger equation
+  - pseudo-spectral method
+  - quantum turbulence
