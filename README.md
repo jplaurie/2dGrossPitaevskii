@@ -339,16 +339,29 @@ src/
   fftw_utils.cpp/.hpp         base-grid complex FFTW transforms
   solver.cpp/.hpp             linear operator, forcing, and time stepping
   integrator.hpp              shared CPU/CUDA stage formulas
-  output.cpp/.hpp             diagnostics, snapshots, and checkpoints
+  diagnostics.cpp             energies, spectra, fluxes, and forcing records
+  output.cpp/.hpp             snapshots, checkpoints, and restart loading
   output_transaction.cpp      atomic output recovery and run history
   backend.hpp                 common nonlinear-backend interface
   backend_cpu.cpp             FFTW/OpenMP cubic backend
   backend_mpi.cpp             FFTW-MPI/OpenMP cubic backend
   backend_cuda.cu             CUDA/cuFFT backend and device time stepping
 tests/
+  parameters.cpp              parameter parsing and validation tests
   numerics.cpp                direct-DFT nonlinear verification
   regression.py               restart and cross-backend comparisons
 ```
+
+Configuration text is converted at the input boundary into typed `Integrator`
+and `ForcingProfile` values. Parsing, assignment, and cross-parameter
+validation are separate steps, so the numerical code never interprets raw
+configuration strings.
+
+The `Solver` owns the shared run state and delegates the dealiased cubic term—and,
+for CUDA, device-resident time stepping—to the selected backend. Named ETD
+stages make the CPU and CUDA implementations follow the same sequence, while
+run preparation, restart restoration, diagnostics, and state output remain
+focused operations.
 
 ## License and citation
 

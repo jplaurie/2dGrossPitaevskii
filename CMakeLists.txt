@@ -15,6 +15,7 @@ add_library(gp2d_common
     src/parameters.cpp
     src/fftw_utils.cpp
     src/spectral.cpp
+    src/diagnostics.cpp
     src/output.cpp
     src/output_transaction.cpp
     src/solver.cpp)
@@ -84,6 +85,10 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(gp2d_parameters_tests tests/parameters.cpp)
+  target_link_libraries(gp2d_parameters_tests PRIVATE gp2d_common)
+  add_test(NAME parameter_parsing COMMAND gp2d_parameters_tests)
+
   add_executable(gp2d_numerics_tests tests/numerics.cpp src/backend_cpu.cpp)
   target_link_libraries(gp2d_numerics_tests PRIVATE gp2d_common)
   if(FFTW_THREADS_LIBRARY)
