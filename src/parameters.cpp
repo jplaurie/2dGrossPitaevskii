@@ -221,7 +221,7 @@ const char *forcingProfileName(ForcingProfile profile) {
     throw std::logic_error("unknown forcing profile");
 }
 
-Parameters readParameters(const std::filesystem::path &path) {
+Parameters readParameters(const std::filesystem::path &path, bool requireExistingInitialCondition) {
     std::ifstream input(path);
     if (!input)
         throw std::runtime_error("cannot open parameter file: " + path.string());
@@ -233,11 +233,11 @@ Parameters readParameters(const std::filesystem::path &path) {
         if (const auto setting = parseParameterLine(line, lineNumber))
             applyParameter(*setting, parameters);
     }
-    validateParameters(parameters);
+    validateParameters(parameters, requireExistingInitialCondition);
     return parameters;
 }
 
-void validateParameters(const Parameters &parameters) {
+void validateParameters(const Parameters &parameters, bool requireExistingInitialCondition) {
     if (parameters.nx < 4 || parameters.ny < 4 || parameters.nx % 2 != 0 || parameters.ny % 2 != 0)
         throw std::runtime_error("nx and ny must be even and at least four");
     const auto fftLimit = static_cast<std::size_t>(std::numeric_limits<int>::max());
@@ -305,7 +305,7 @@ void validateParameters(const Parameters &parameters) {
             throw std::runtime_error(
                 "targetWaveActionInjectionRate applies only to stochastic forcing");
     }
-    if (!parameters.initialConditionFile.empty() &&
+    if (requireExistingInitialCondition && !parameters.initialConditionFile.empty() &&
         !std::filesystem::exists(parameters.initialConditionFile))
         throw std::runtime_error("initialConditionFile does not exist: " +
                                  parameters.initialConditionFile.string());

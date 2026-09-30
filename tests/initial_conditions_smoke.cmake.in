@@ -1,0 +1,89 @@
+set(imprint "@CMAKE_CURRENT_BINARY_DIR@/gp2d_vortex_imprint")
+set(relax "@CMAKE_CURRENT_BINARY_DIR@/gp2d_relax")
+set(solver "@CMAKE_CURRENT_BINARY_DIR@/gross_pitaevskii_cpu")
+set(run_root "@GP2D_INITIAL_SMOKE_DIR@")
+file(REMOVE_RECURSE "${run_root}")
+file(MAKE_DIRECTORY "${run_root}")
+
+file(WRITE "${run_root}/relax.params" [=[
+nx 16
+ny 16
+aspectRatio 1
+timeStep 0.0001
+numberOfSteps 4
+outputIntervalSteps 2
+integrator etd4
+dispersionCoefficient -0.5
+nonlinearityCoefficient 0.5
+chemicalPotential -0.5
+hyperviscosity 0
+hypoviscosity 0
+forcingEnabled false
+threadCount 1
+dataDirectory unused_data
+outputDirectory unused_output
+]=])
+file(WRITE "${run_root}/vortices.dat" [=[
+# PointVortex initial condition
+# geometry=periodic pattern=dipole seed=1234567
+# box_length=6.2831853071795862 disk_radius=1 infinite_half_width=1
+# minimum_separation=1.4
+# x y circulation
+-0.7 0 1
+0.7 0 -1
+]=])
+
+execute_process(
+  COMMAND "${imprint}" --parameters relax.params --vortices vortices.dat
+          --output imprinted.dat
+  WORKING_DIRECTORY "${run_root}"
+  RESULT_VARIABLE imprint_result OUTPUT_VARIABLE imprint_stdout ERROR_VARIABLE imprint_stderr)
+if(NOT imprint_result EQUAL 0)
+  message(FATAL_ERROR "vortex imprint failed:\n${imprint_stdout}\n${imprint_stderr}")
+endif()
+
+execute_process(
+  COMMAND "${relax}" --parameters relax.params --input imprinted.dat --output relaxed.dat
+          --tolerance 0
+  WORKING_DIRECTORY "${run_root}"
+  RESULT_VARIABLE relax_result OUTPUT_VARIABLE relax_stdout ERROR_VARIABLE relax_stderr)
+if(NOT relax_result EQUAL 0)
+  message(FATAL_ERROR "imaginary-time relaxation failed:\n${relax_stdout}\n${relax_stderr}")
+endif()
+
+foreach(path imprinted.dat relaxed.dat relaxed.dat.relaxation.csv)
+  if(NOT EXISTS "${run_root}/${path}")
+    message(FATAL_ERROR "missing initial-condition workflow output: ${path}")
+  endif()
+endforeach()
+file(READ "${run_root}/relaxed.dat.relaxation.csv" diagnostics)
+if(diagnostics MATCHES "[Nn][Aa][Nn]" OR diagnostics MATCHES "[Ii][Nn][Ff]")
+  message(FATAL_ERROR "relaxation produced non-finite diagnostics: ${diagnostics}")
+endif()
+
+file(WRITE "${run_root}/run.params" [=[
+nx 16
+ny 16
+aspectRatio 1
+timeStep 0.0001
+numberOfSteps 1
+outputIntervalSteps 1
+integrator etd4
+dispersionCoefficient -0.5
+nonlinearityCoefficient 0.5
+chemicalPotential -0.5
+hyperviscosity 0
+hypoviscosity 0
+forcingEnabled false
+threadCount 1
+initialConditionFile relaxed.dat
+dataDirectory data
+outputDirectory output
+]=])
+execute_process(
+  COMMAND "${solver}" run.params
+  WORKING_DIRECTORY "${run_root}"
+  RESULT_VARIABLE solver_result OUTPUT_VARIABLE solver_stdout ERROR_VARIABLE solver_stderr)
+if(NOT solver_result EQUAL 0)
+  message(FATAL_ERROR "real-time solver rejected relaxed state:\n${solver_stdout}\n${solver_stderr}")
+endif()

@@ -319,6 +319,21 @@ Use new data and output directories for an independent run. Existing restart
 metadata always resumes that run; `overwriteOutput` only permits replacement
 of colliding output files.
 
+## Point-vortex initial conditions
+
+The [`initial_conditions/`](initial_conditions/) directory provides a modern
+bridge from the current
+[`2dPointVortex`](https://github.com/jplaurie/2dPointVortex) output formats.
+`gp2d_vortex_imprint` converts a generated PointVortex initial-condition file
+or a `trajectory.csv` frame into a doubly periodic GP wavefunction with
+accurate Padé vortex cores.
+`gp2d_relax` then performs CPU imaginary-time relaxation, optionally in a
+uniformly moving frame for vortex dipoles. It reuses this solver's production
+FFTW/OpenMP nonlinear backend and writes a field that can be passed directly
+as `initialConditionFile`. See the
+[`initial-condition guide`](initial_conditions/README.md) for equations,
+examples, drift conventions, and commands.
+
 ## Plotting and movies
 
 The [`scripts/`](scripts/) directory contains Jupyter notebooks for physical
@@ -346,9 +361,14 @@ src/
   backend_cpu.cpp             FFTW/OpenMP cubic backend
   backend_mpi.cpp             FFTW-MPI/OpenMP cubic backend
   backend_cuda.cu             CUDA/cuFFT backend and device time stepping
+initial_conditions/
+  vortex_imprint.cpp          periodic point-vortex to GP-field command
+  imaginary_time.cpp          CPU comoving imaginary-time relaxation
+  vortex_field.cpp/.hpp       input parsing, periodic phase, Padé core profile
 tests/
   parameters.cpp              parameter parsing and validation tests
   numerics.cpp                direct-DFT nonlinear verification
+  initial_conditions.cpp      periodic-phase and core-profile tests
   regression.py               restart and cross-backend comparisons
 ```
 

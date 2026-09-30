@@ -62,7 +62,8 @@ struct Parameters {
 
 [[nodiscard]] const char *integratorName(Integrator integrator);
 [[nodiscard]] const char *forcingProfileName(ForcingProfile profile);
-Parameters readParameters(const std::filesystem::path &path);
-void validateParameters(const Parameters &parameters);
+Parameters readParameters(const std::filesystem::path &path,
+                          bool requireExistingInitialCondition = true);
+void validateParameters(const Parameters &parameters, bool requireExistingInitialCondition = true);
 void writeParameterRecord(const Parameters &parameters, const std::string &backend,
                           const std::filesystem::path &recordDirectory = {});

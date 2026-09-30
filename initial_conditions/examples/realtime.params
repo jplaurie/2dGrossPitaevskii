@@ -1,0 +1,22 @@
+# Conservative real-time run starting from the relaxed example dipole.
+nx 512
+ny 512
+aspectRatio 1
+timeStep 1.e-5
+numberOfSteps 100000
+outputIntervalSteps 1000
+
+integrator etd4
+dispersionCoefficient -0.5
+nonlinearityCoefficient 500
+chemicalPotential -500
+
+hyperviscosity 0
+hypoviscosity 0
+ginzburgLandauDamping 0
+forcingEnabled false
+
+threadCount 0
+initialConditionFile runs/dipole/relaxed.dat
+dataDirectory runs/dipole/realtime_data
+outputDirectory runs/dipole/realtime_output

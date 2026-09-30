@@ -45,6 +45,31 @@ else()
   message(WARNING "FFTW threads library not found; CPU FFT plans remain single-threaded")
 endif()
 
+add_library(gp2d_initial_conditions initial_conditions/vortex_field.cpp)
+target_include_directories(gp2d_initial_conditions PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/initial_conditions)
+target_link_libraries(gp2d_initial_conditions PUBLIC gp2d_common)
+target_compile_features(gp2d_initial_conditions PUBLIC cxx_std_20)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(gp2d_initial_conditions PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(gp2d_vortex_imprint initial_conditions/vortex_imprint.cpp)
+target_link_libraries(gp2d_vortex_imprint PRIVATE gp2d_initial_conditions)
+
+# Imaginary-time relaxation deliberately uses the production CPU nonlinear
+# backend, so its dealiasing and normalization stay identical to real-time runs.
+add_executable(gp2d_relax initial_conditions/imaginary_time.cpp src/backend_cpu.cpp)
+target_link_libraries(gp2d_relax PRIVATE gp2d_initial_conditions)
+if(FFTW_THREADS_LIBRARY)
+  target_link_libraries(gp2d_relax PRIVATE ${FFTW_THREADS_LIBRARY})
+  target_compile_definitions(gp2d_relax PRIVATE GP2D_HAVE_FFTW_THREADS=1)
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(gp2d_vortex_imprint PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(gp2d_relax PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(GP2D_MPI)
   find_package(MPI COMPONENTS CXX)
   find_path(FFTW_MPI_INCLUDE_DIR fftw3-mpi.h)
@@ -96,10 +121,18 @@ if(BUILD_TESTING)
     target_compile_definitions(gp2d_numerics_tests PRIVATE GP2D_HAVE_FFTW_THREADS=1)
   endif()
   add_test(NAME nonlinear_direct_dft COMMAND gp2d_numerics_tests)
+  add_executable(gp2d_initial_condition_tests tests/initial_conditions.cpp)
+  target_link_libraries(gp2d_initial_condition_tests PRIVATE gp2d_initial_conditions)
+  add_test(NAME initial_condition_math COMMAND gp2d_initial_condition_tests)
   set(GP2D_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/smoke")
   file(MAKE_DIRECTORY "${GP2D_SMOKE_DIR}")
   configure_file(tests/smoke.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/smoke.cmake" @ONLY)
   add_test(NAME cpu_output_smoke COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/smoke.cmake")
+  set(GP2D_INITIAL_SMOKE_DIR "${CMAKE_CURRENT_BINARY_DIR}/initial_condition_smoke")
+  configure_file(tests/initial_conditions_smoke.cmake.in
+                 "${CMAKE_CURRENT_BINARY_DIR}/initial_conditions_smoke.cmake" @ONLY)
+  add_test(NAME initial_condition_workflow
+           COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/initial_conditions_smoke.cmake")
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
     add_test(NAME regression_cpu COMMAND ${Python3_EXECUTABLE}

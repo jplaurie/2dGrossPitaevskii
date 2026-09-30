@@ -3,7 +3,7 @@ BUILD_TYPE ?= Release
 JOBS ?= 4
 CUDA_ARCHITECTURES ?= 120
 
-.PHONY: all cpu mpi cuda test clean configure
+.PHONY: all cpu mpi cuda initial test clean configure
 
 all: configure
 	cmake --build $(BUILD_DIR) -j$(JOBS)
@@ -20,6 +20,9 @@ mpi: configure
 
 cuda: configure
 	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cuda -j$(JOBS)
+
+initial: configure
+	cmake --build $(BUILD_DIR) --target gp2d_vortex_imprint gp2d_relax -j$(JOBS)
 
 test: all
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
