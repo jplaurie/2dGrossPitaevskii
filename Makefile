@@ -3,7 +3,7 @@ BUILD_TYPE ?= Release
 JOBS ?= 4
 CUDA_ARCHITECTURES ?= 120
 
-.PHONY: all cpu mpi cuda initial test clean configure
+.PHONY: all cpu cpu-serial mpi cuda cuda-mixed benchmark-backends initial test clean configure
 
 all: configure
 	cmake --build $(BUILD_DIR) -j$(JOBS)
@@ -15,11 +15,21 @@ configure:
 cpu: configure
 	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cpu -j$(JOBS)
 
+cpu-serial: configure
+	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cpu_serial -j$(JOBS)
+
 mpi: configure
 	cmake --build $(BUILD_DIR) --target gross_pitaevskii_mpi -j$(JOBS)
 
 cuda: configure
 	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cuda -j$(JOBS)
+
+cuda-mixed: configure
+	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cuda_mixed -j$(JOBS)
+
+benchmark-backends: configure
+	cmake --build $(BUILD_DIR) --target gp2d_benchmark_cpu_serial gp2d_benchmark_cpu \
+		gp2d_benchmark_mpi gp2d_benchmark_cuda gp2d_benchmark_cuda_mixed -j$(JOBS)
 
 initial: configure
 	cmake --build $(BUILD_DIR) --target gp2d_vortex_imprint gp2d_relax -j$(JOBS)

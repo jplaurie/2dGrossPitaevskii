@@ -222,7 +222,7 @@ def cpu_checks(root, cpu):
     print("CPU outputs and exact stochastic restart passed")
 
 
-def backend_checks(root, cpu, candidate):
+def backend_checks(root, cpu, candidate, tolerance):
     initial = root / "initial.dat"
     initial_field(initial, 12, 14)
     cases = [
@@ -249,6 +249,7 @@ def backend_checks(root, cpu, candidate):
                                 hypoviscosityCutoffEnabled="true",
                                 hypoviscosityCutoff=3)),
     ]
+    largest_difference = 0.0
     for name, settings in cases:
         reference = root / f"cpu_{name}"
         comparison = root / f"candidate_{name}"
@@ -259,7 +260,22 @@ def backend_checks(root, cpu, candidate):
         run(candidate, write_params(comparison, **common))
         error = relative_difference(checkpoint(reference, 1),
                                     checkpoint(comparison, 1))
-        assert error < 5e-11, f"{name} backend mismatch: {error}"
+        largest_difference = max(largest_difference, error)
+        assert error < tolerance, f"{name} backend mismatch: {error}"
+
+    sustained_initial = root / "sustained_initial.dat"
+    initial_field(sustained_initial, 96, 128)
+    sustained = dict(nx=96, ny=128, aspectRatio=1.5, integrator="etd4",
+                     timeStep=1e-4, numberOfSteps=64, outputIntervalSteps=64,
+                     initialConditionFile=sustained_initial, forcingEnabled="false",
+                     threadCount=2)
+    reference = root / "cpu_sustained"
+    comparison = root / "candidate_sustained"
+    run(cpu, write_params(reference, **sustained))
+    run(candidate, write_params(comparison, **sustained))
+    error = relative_difference(checkpoint(reference, 1), checkpoint(comparison, 1))
+    largest_difference = max(largest_difference, error)
+    assert error < tolerance, f"sustained rectangular backend mismatch: {error}"
 
     # A backend must also restore its own spectral and random-generator state
     # exactly when a stochastic run is split across invocations.
@@ -273,7 +289,8 @@ def backend_checks(root, cpu, candidate):
     run(candidate, split_params)
     run(candidate, split_params)
     assert checkpoint(full) == checkpoint(split), "candidate restart is not exact"
-    print("Integrators, forcing profiles, damping, and restart agree across backends")
+    print("Integrators, forcing profiles, damping, and restart agree across backends "
+          f"(maximum relative difference {largest_difference:.3g})")
 
 
 def main():
@@ -283,6 +300,7 @@ def main():
     parser.add_argument("--candidate")
     parser.add_argument("--mpiexec")
     parser.add_argument("--mpi-numproc-flag", default="-n")
+    parser.add_argument("--tolerance", type=float, default=5e-11)
     args = parser.parse_args()
     if args.mode == "backend" and not args.candidate:
         parser.error("backend mode requires --candidate")
@@ -294,7 +312,7 @@ def main():
         if args.mode == "cpu":
             cpu_checks(Path(temporary), cpu)
         else:
-            backend_checks(Path(temporary), cpu, candidate)
+            backend_checks(Path(temporary), cpu, candidate, args.tolerance)
 
 
 if __name__ == "__main__":

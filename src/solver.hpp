@@ -13,6 +13,7 @@ class Solver {
   public:
     Solver(Parameters parameters, std::unique_ptr<NonlinearBackend> backend);
     void run();
+    [[nodiscard]] double benchmark(std::uint64_t warmupSteps, std::uint64_t measuredSteps);
 
   private:
     void buildLinearOperator();
@@ -27,6 +28,7 @@ class Solver {
     void initializeDeviceTimeStepping(const SpectralField &wavefunction);
     void writeState(const RestartState &state);
     double writeOutputFrame(const RestartState &state, DiagnosticsAverages &averages);
+    SpectralField makeBenchmarkState() const;
 
     Parameters parameters_;
     std::unique_ptr<NonlinearBackend> backend_;

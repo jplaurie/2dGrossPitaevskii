@@ -51,8 +51,6 @@ Solver::Solver(Parameters parameters, std::unique_ptr<NonlinearBackend> backend)
     if (parameters_.threadCount > 0)
         omp_set_num_threads(parameters_.threadCount);
 #endif
-    std::filesystem::create_directories(parameters_.dataDirectory);
-    std::filesystem::create_directories(parameters_.outputDirectory);
     if (!backend_->supportsDeviceTimeStepping()) {
         const std::size_t count = parameters_.nonlinearStageCount();
         for (std::size_t i = 0; i < count; ++i)
@@ -408,6 +406,8 @@ void Solver::initializeDeviceTimeStepping(const SpectralField &wavefunction) {
 }
 
 RestartState Solver::prepareRun() {
+    std::filesystem::create_directories(parameters_.dataDirectory);
+    std::filesystem::create_directories(parameters_.outputDirectory);
     const bool recoveredFresh = backendIsRoot() && recoverOutputTransaction(parameters_);
     backendBarrier();
     RestartState state = readRestart(parameters_, baseTransform_, backendIsRoot());
@@ -432,6 +432,38 @@ RestartState Solver::prepareRun() {
     }
     initializeDeviceTimeStepping(state.wavefunction);
     return state;
+}
+
+SpectralField Solver::makeBenchmarkState() const {
+    SpectralField wavefunction(parameters_.nx * parameters_.ny);
+    for (std::size_t y = 0; y < parameters_.ny; ++y) {
+        const double ky = static_cast<double>(signedWave(y, parameters_.ny));
+        for (std::size_t x = 0; x < parameters_.nx; ++x) {
+            const double kx = static_cast<double>(signedWave(x, parameters_.nx));
+            const double k2 = kx * kx + ky * ky;
+            const double amplitude = 0.5 / ((1.0 + k2) * (1.0 + k2));
+            const double phase = 0.31 * kx + 0.17 * ky + 0.011 * std::abs(kx * ky);
+            wavefunction[spectralIndex(x, y, parameters_.nx)] =
+                amplitude * Complex(std::cos(phase), std::sin(phase));
+        }
+    }
+    enforceStateConstraints(wavefunction, parameters_);
+    return wavefunction;
+}
+
+double Solver::benchmark(std::uint64_t warmupSteps, std::uint64_t measuredSteps) {
+    if (measuredSteps == 0)
+        throw std::runtime_error("benchmark requires at least one measured step");
+    SpectralField wavefunction = makeBenchmarkState();
+    initializeDeviceTimeStepping(wavefunction);
+    for (std::uint64_t i = 0; i < warmupSteps; ++i)
+        step(wavefunction);
+    backendBarrier();
+    const auto start = std::chrono::steady_clock::now();
+    for (std::uint64_t i = 0; i < measuredSteps; ++i)
+        step(wavefunction);
+    backendBarrier();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 
 double Solver::writeOutputFrame(const RestartState &state, DiagnosticsAverages &averages) {

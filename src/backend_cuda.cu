@@ -16,6 +16,11 @@ __host__ __device__ inline cufftDoubleComplex operator*(cufftDoubleComplex a,
 __host__ __device__ inline cufftDoubleComplex operator*(double a, cufftDoubleComplex b) {
     return {a * b.x, a * b.y};
 }
+#ifdef GP2D_CUDA_MIXED
+__host__ __device__ inline cufftComplex operator*(cufftComplex a, cufftComplex b) {
+    return {a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x};
+}
+#endif
 
 #include "backend.hpp"
 #include "spectral.hpp"
@@ -36,6 +41,16 @@ static_assert(sizeof(Complex) == sizeof(cufftDoubleComplex));
 static_assert(std::is_trivially_copyable_v<Complex>);
 
 namespace {
+#ifdef GP2D_CUDA_MIXED
+using TransformComplex = cufftComplex;
+using TransformReal = float;
+constexpr cufftType transformType = CUFFT_C2C;
+#else
+using TransformComplex = cufftDoubleComplex;
+using TransformReal = double;
+constexpr cufftType transformType = CUFFT_Z2Z;
+#endif
+
 void cudaCheck(cudaError_t status, const char *operation) {
     if (status != cudaSuccess)
         throw std::runtime_error(std::string(operation) + ": " + cudaGetErrorString(status));
@@ -81,7 +96,7 @@ __device__ long deviceWave(std::size_t index, std::size_t count) {
                                     : static_cast<long>(index) - static_cast<long>(count);
 }
 
-__global__ void embedBaseSpectrum(const cufftDoubleComplex *input, cufftDoubleComplex *padded,
+__global__ void embedBaseSpectrum(const cufftDoubleComplex *input, TransformComplex *padded,
                                   std::size_t nx, std::size_t ny, std::size_t mx, std::size_t my) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= mx * my)
@@ -91,25 +106,26 @@ __global__ void embedBaseSpectrum(const cufftDoubleComplex *input, cufftDoubleCo
     const bool retained = kx >= -static_cast<long>(nx / 2) && kx < static_cast<long>(nx / 2) &&
                           ky >= -static_cast<long>(ny / 2) && ky < static_cast<long>(ny / 2);
     if (!retained) {
-        padded[i] = {0.0, 0.0};
+        padded[i] = {0, 0};
         return;
     }
     const std::size_t x = kx >= 0 ? static_cast<std::size_t>(kx)
                                   : static_cast<std::size_t>(static_cast<long>(nx) + kx);
     const std::size_t y = ky >= 0 ? static_cast<std::size_t>(ky)
                                   : static_cast<std::size_t>(static_cast<long>(ny) + ky);
-    padded[i] = input[y * nx + x];
+    const cufftDoubleComplex value = input[y * nx + x];
+    padded[i] = {static_cast<TransformReal>(value.x), static_cast<TransformReal>(value.y)};
 }
 
-__global__ void squareField(const cufftDoubleComplex *input, cufftDoubleComplex *output,
+__global__ void squareField(const TransformComplex *input, TransformComplex *output,
                             std::size_t count) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i < count)
         output[i] = input[i] * input[i];
 }
 
-__global__ void filterProjectedSquare(cufftDoubleComplex *field, std::size_t nx, std::size_t ny,
-                                      std::size_t mx, std::size_t my, double scale) {
+__global__ void filterProjectedSquare(TransformComplex *field, std::size_t nx, std::size_t ny,
+                                      std::size_t mx, std::size_t my, TransformReal scale) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= mx * my)
         return;
@@ -119,20 +135,20 @@ __global__ void filterProjectedSquare(cufftDoubleComplex *field, std::size_t nx,
         field[i].x *= scale;
         field[i].y *= scale;
     } else {
-        field[i] = {0.0, 0.0};
+        field[i] = {0, 0};
     }
 }
 
-__global__ void formCubicProduct(const cufftDoubleComplex *square, const cufftDoubleComplex *psi,
-                                 cufftDoubleComplex *output, std::size_t count) {
+__global__ void formCubicProduct(const TransformComplex *square, const TransformComplex *psi,
+                                 TransformComplex *output, std::size_t count) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= count)
         return;
-    const cufftDoubleComplex conjugate{psi[i].x, -psi[i].y};
+    const TransformComplex conjugate{psi[i].x, -psi[i].y};
     output[i] = square[i] * conjugate;
 }
 
-__global__ void extractNonlinearTerm(const cufftDoubleComplex *padded, cufftDoubleComplex *output,
+__global__ void extractNonlinearTerm(const TransformComplex *padded, cufftDoubleComplex *output,
                                      std::size_t nx, std::size_t ny, std::size_t mx, std::size_t my,
                                      double lx, double ly, double coefficient, double damping,
                                      double dampingCutoff, double scale) {
@@ -149,11 +165,14 @@ __global__ void extractNonlinearTerm(const cufftDoubleComplex *padded, cufftDoub
     const double kx = twoPi * static_cast<double>(kxIndex) / lx;
     const double ky = twoPi * static_cast<double>(kyIndex) / ly;
     const double gamma = damping > 0.0 && sqrt(kx * kx + ky * ky) > dampingCutoff ? damping : 0.0;
-    const cufftDoubleComplex value = padded[py * mx + px];
+    const TransformComplex value = padded[py * mx + px];
     const double denominator = gamma * gamma + 1.0;
     const double factor = coefficient * scale / denominator;
     // Divide by (-gamma + i).
-    output[i] = {factor * (-gamma * value.x + value.y), factor * (-value.x - gamma * value.y)};
+    const double real = static_cast<double>(value.x);
+    const double imaginary = static_cast<double>(value.y);
+    output[i] = {factor * (-gamma * real + imaginary),
+                 factor * (-real - gamma * imaginary)};
 }
 
 __global__ void addDeterministicForcing(cufftDoubleComplex *rhs, const cufftDoubleComplex *forcing,
@@ -217,7 +236,7 @@ class CudaBackend final : public NonlinearBackend {
           compactNoiseEnabled_(!environmentEnabled("GP2D_CUDA_FULL_NOISE")),
           profileEnabled_(environmentEnabled("GP2D_CUDA_PROFILE")) {
         cufftCheck(cufftPlan2d(&plan_, static_cast<int>(parameters.my()),
-                               static_cast<int>(parameters.mx()), CUFFT_Z2Z),
+                               static_cast<int>(parameters.mx()), transformType),
                    "create dealiased transform plan");
         if (profileEnabled_) {
             cudaCheck(cudaEventCreate(&profileStart_), "create CUDA profile event");
@@ -384,6 +403,15 @@ class CudaBackend final : public NonlinearBackend {
                   "upload wavefunction");
     }
 
+    void executeTransform(TransformComplex *input, TransformComplex *output, int direction,
+                          const char *operation) {
+#ifdef GP2D_CUDA_MIXED
+        cufftCheck(cufftExecC2C(plan_, input, output, direction), operation);
+#else
+        cufftCheck(cufftExecZ2Z(plan_, input, output, direction), operation);
+#endif
+    }
+
     void launchStage(int stage) {
         advanceIntegrationStage<<<blocks(baseCount_), threads>>>(
             stage, parameters_.integrator, parameters_.timeStep, baseCount_, coefficients_,
@@ -405,28 +433,25 @@ class CudaBackend final : public NonlinearBackend {
                                                              parameters_.nx, parameters_.ny,
                                                              parameters_.mx(), parameters_.my());
         cudaCheck(cudaGetLastError(), "embed device spectral field");
-        cufftCheck(cufftExecZ2Z(plan_, paddedSpectrum_.data(), psi_.data(), CUFFT_INVERSE),
-                   "execute wavefunction inverse transform");
+        executeTransform(paddedSpectrum_.data(), psi_.data(), CUFFT_INVERSE,
+                         "execute wavefunction inverse transform");
         squareField<<<blocks(paddedCount_), threads>>>(psi_.data(), projectedSquare_.data(),
                                                        paddedCount_);
         cudaCheck(cudaGetLastError(), "square device wavefunction");
-        cufftCheck(
-            cufftExecZ2Z(plan_, projectedSquare_.data(), squareSpectrum_.data(), CUFFT_FORWARD),
-            "execute square forward transform");
+        executeTransform(projectedSquare_.data(), squareSpectrum_.data(), CUFFT_FORWARD,
+                         "execute square forward transform");
         const double scale = 1.0 / static_cast<double>(paddedCount_);
         filterProjectedSquare<<<blocks(paddedCount_), threads>>>(
             squareSpectrum_.data(), parameters_.nx, parameters_.ny, parameters_.mx(),
-            parameters_.my(), scale);
+            parameters_.my(), static_cast<TransformReal>(scale));
         cudaCheck(cudaGetLastError(), "filter square convolution");
-        cufftCheck(
-            cufftExecZ2Z(plan_, squareSpectrum_.data(), projectedSquare_.data(), CUFFT_INVERSE),
-            "execute filtered-square inverse transform");
+        executeTransform(squareSpectrum_.data(), projectedSquare_.data(), CUFFT_INVERSE,
+                         "execute filtered-square inverse transform");
         formCubicProduct<<<blocks(paddedCount_), threads>>>(projectedSquare_.data(), psi_.data(),
                                                             paddedSpectrum_.data(), paddedCount_);
         cudaCheck(cudaGetLastError(), "form cubic device nonlinearity");
-        cufftCheck(
-            cufftExecZ2Z(plan_, paddedSpectrum_.data(), squareSpectrum_.data(), CUFFT_FORWARD),
-            "execute nonlinear forward transform");
+        executeTransform(paddedSpectrum_.data(), squareSpectrum_.data(), CUFFT_FORWARD,
+                         "execute nonlinear forward transform");
         extractNonlinearTerm<<<blocks(baseCount_), threads>>>(
             squareSpectrum_.data(), output, parameters_.nx, parameters_.ny, parameters_.mx(),
             parameters_.my(), parameters_.lx(), parameters_.ly(),
@@ -437,8 +462,8 @@ class CudaBackend final : public NonlinearBackend {
 
     Parameters parameters_;
     std::size_t baseCount_, paddedCount_;
-    DeviceBuffer<cufftDoubleComplex> wavefunction_, nonlinearTerm_, paddedSpectrum_, psi_,
-        projectedSquare_, squareSpectrum_;
+    DeviceBuffer<cufftDoubleComplex> wavefunction_, nonlinearTerm_;
+    DeviceBuffer<TransformComplex> paddedSpectrum_, psi_, projectedSquare_, squareSpectrum_;
     std::array<DeviceBuffer<cufftDoubleComplex>, 10> coefficientBuffers_;
     std::array<DeviceBuffer<cufftDoubleComplex>, 7> stageBuffers_;
     DeviceBuffer<cufftDoubleComplex> forcing_, noise_, compactNoise_;
@@ -456,9 +481,15 @@ class CudaBackend final : public NonlinearBackend {
 void backendInitialize(int &, char **&) { cudaCheck(cudaFree(nullptr), "initialize CUDA"); }
 void backendFinalize() {}
 void backendAbort(int) {}
-void backendBarrier() {}
+void backendBarrier() { cudaCheck(cudaDeviceSynchronize(), "synchronize CUDA device"); }
 bool backendIsRoot() { return true; }
-const char *backendName() { return "CUDA"; }
+const char *backendName() {
+#ifdef GP2D_CUDA_MIXED
+    return "CUDA mixed (FP64 state / FP32 FFT)";
+#else
+    return "CUDA";
+#endif
+}
 std::uint64_t backendSynchronizeSeed(std::uint64_t seed) { return seed; }
 std::unique_ptr<NonlinearBackend> makeBackend(const Parameters &parameters) {
     return std::make_unique<CudaBackend>(parameters);

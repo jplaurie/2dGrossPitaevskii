@@ -11,7 +11,9 @@
 #endif
 
 namespace {
+#ifdef GP2D_HAVE_FFTW_THREADS
 bool fftwThreadsInitialized = false;
+#endif
 
 class CpuBackend final : public NonlinearBackend {
   public:
