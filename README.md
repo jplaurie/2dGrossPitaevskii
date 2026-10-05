@@ -4,6 +4,8 @@ A C++20 solver for a complex Gross–Pitaevskii field on a doubly periodic
 domain. A shared numerical model is available through OpenMP, hybrid
 MPI/OpenMP, and CUDA backends.
 
+Current release: `v0.4.0` (2026-10-04).
+
 Five executables share one model, parameter format, set of time integrators,
 and output format:
 
@@ -433,6 +435,19 @@ for CUDA, device-resident time stepping—to the selected backend. Named ETD
 stages make the CPU and CUDA implementations follow the same sequence, while
 run preparation, restart restoration, diagnostics, and state output remain
 focused operations.
+
+## Version history
+
+These versions were assigned retrospectively to the main development milestones;
+the dates below are the dates of the tagged commits.
+
+| Version | Date | Changes |
+| --- | --- | --- |
+| `v0.4.0` | 2026-10-04 | Added the mixed-precision CUDA path, reproducible multi-backend benchmarks, performance plots and mixed/full-precision regression coverage. |
+| `v0.3.0` | 2026-09-30 | Added vortex-imprinted initial-condition generation and comoving imaginary-time relaxation, with tests and examples; reorganized the solver for readability. |
+| `v0.2.0` | 2026-09-16 | Reduced CUDA transfers for stochastic forcing and added reusable plotting, diagnostic-notebook and movie tools. |
+| `v0.1.1` | 2026-09-08 | Corrected the dissipation implementation and expanded numerical regression checks. |
+| `v0.1.0` | 2026-09-07 | Introduced the modern C++20 codebase with shared CPU/OpenMP, MPI/OpenMP and CUDA implementations, unified builds, validated parameters, restartable output and tests. |
 
 ## License and citation
 
