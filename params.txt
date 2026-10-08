@@ -33,6 +33,12 @@ targetWaveActionInjectionRate 0
 randomSeed 0
 
 writeModeDiagnostics false
+writeVortexDiagnostics false
+fieldOutputFormat text
+hdf5CompressionLevel 0
+fftwPlanning estimate
+fftwWisdomFile gp2d.fftw-wisdom
+cudaGraphEnabled false
 threadCount 0
 overwriteOutput true
 dataDirectory data

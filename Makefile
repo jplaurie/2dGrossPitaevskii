@@ -3,7 +3,7 @@ BUILD_TYPE ?= Release
 JOBS ?= 4
 CUDA_ARCHITECTURES ?= 120
 
-.PHONY: all cpu cpu-serial mpi cuda cuda-mixed benchmark-backends initial test clean configure
+.PHONY: all cpu cpu-serial mpi cuda cuda-mixed exporter benchmark-backends initial test clean configure
 
 all: configure
 	cmake --build $(BUILD_DIR) -j$(JOBS)
@@ -26,6 +26,9 @@ cuda: configure
 
 cuda-mixed: configure
 	cmake --build $(BUILD_DIR) --target gross_pitaevskii_cuda_mixed -j$(JOBS)
+
+exporter: configure
+	cmake --build $(BUILD_DIR) --target gp2d_hdf5_export -j$(JOBS)
 
 benchmark-backends: configure
 	cmake --build $(BUILD_DIR) --target gp2d_benchmark_cpu_serial gp2d_benchmark_cpu \

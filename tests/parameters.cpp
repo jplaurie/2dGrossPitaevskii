@@ -66,6 +66,14 @@ int main() {
                          "forcingEnabled false\n"
                          "forcingProfile singleMode\n"
                          "forcingWavenumber 2\n"
+                         "fftwPlanning measure\n"
+                         "fftwWisdomFile plans.wisdom\n"
+                         "cudaGraphEnabled true\n"
+                         "writeVortexDiagnostics true\n"
+#ifdef GP2D_HAVE_HDF5
+                         "fieldOutputFormat both\n"
+#endif
+                         "hdf5CompressionLevel 4\n"
                          "threadCount 3\n"
                          "overwriteOutput true\n"
                          "dataDirectory data\n"
@@ -81,6 +89,16 @@ int main() {
             "integrator was not converted to its enum");
     require(parameters.forcingProfile == ForcingProfile::singleMode,
             "forcing profile was not converted to its enum");
+    require(parameters.fftwPlanning == FftwPlanning::measure &&
+                parameters.fftwWisdomFile == "plans.wisdom" && parameters.cudaGraphEnabled &&
+                parameters.writeVortexDiagnostics &&
+#ifdef GP2D_HAVE_HDF5
+                parameters.fieldOutputFormat == FieldOutputFormat::both &&
+#else
+                parameters.fieldOutputFormat == FieldOutputFormat::text &&
+#endif
+                parameters.hdf5CompressionLevel == 4,
+            "backend tuning settings were not parsed");
     require(!parameters.forcingEnabled && parameters.threadCount == 3 && parameters.overwriteOutput,
             "boolean or integer settings were not parsed");
 
@@ -95,4 +113,19 @@ int main() {
     const auto negativeFile = temporary.path() / "negative.params";
     writeText(negativeFile, "numberOfSteps -1\n");
     requireFailure([&] { (void)readParameters(negativeFile); }, "numberOfSteps cannot be negative");
+
+    const auto planningFile = temporary.path() / "planning.params";
+    writeText(planningFile, "fftwPlanning exhaustive\n");
+    requireFailure([&] { (void)readParameters(planningFile); },
+                   "fftwPlanning must be estimate, measure, or patient");
+
+    const auto formatFile = temporary.path() / "format.params";
+    writeText(formatFile, "fieldOutputFormat netcdf\n");
+    requireFailure([&] { (void)readParameters(formatFile); },
+                   "fieldOutputFormat must be text, hdf5, or both");
+
+    const auto compressionFile = temporary.path() / "compression.params";
+    writeText(compressionFile, "hdf5CompressionLevel 10\n");
+    requireFailure([&] { (void)readParameters(compressionFile); },
+                   "hdf5CompressionLevel must be between 0 and 9");
 }

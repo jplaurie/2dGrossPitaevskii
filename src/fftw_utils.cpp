@@ -3,6 +3,37 @@
 #include "spectral.hpp"
 
 #include <algorithm>
+#include <filesystem>
+
+namespace {
+unsigned planningFlags = FFTW_ESTIMATE;
+std::filesystem::path wisdomPath;
+} // namespace
+
+void configureFftw(const Parameters &parameters, bool importWisdom) {
+    switch (parameters.fftwPlanning) {
+    case FftwPlanning::estimate:
+        planningFlags = FFTW_ESTIMATE;
+        break;
+    case FftwPlanning::measure:
+        planningFlags = FFTW_MEASURE;
+        break;
+    case FftwPlanning::patient:
+        planningFlags = FFTW_PATIENT;
+        break;
+    }
+    wisdomPath = parameters.fftwWisdomFile;
+    if (importWisdom && !wisdomPath.empty() && std::filesystem::exists(wisdomPath) &&
+        !fftw_import_wisdom_from_filename(wisdomPath.c_str()))
+        throw std::runtime_error("cannot import FFTW wisdom: " + wisdomPath.string());
+}
+
+void saveFftwWisdom() {
+    if (!wisdomPath.empty() && !fftw_export_wisdom_to_filename(wisdomPath.c_str()))
+        throw std::runtime_error("cannot export FFTW wisdom: " + wisdomPath.string());
+}
+
+unsigned fftwPlanningFlags() { return planningFlags; }
 
 class BaseTransform::SquareTransform {
   public:
@@ -26,7 +57,7 @@ class BaseTransform::SquareTransform {
     fftw_plan makePlan(FftwComplexField &field, int direction) {
         return fftw_plan_dft_2d(static_cast<int>(parameters_.my()),
                                 static_cast<int>(parameters_.mx()), fftwData(field),
-                                fftwData(field), direction, FFTW_ESTIMATE);
+                                fftwData(field), direction, fftwPlanningFlags());
     }
 
     void load(const SpectralField &input, FftwComplexField &padded) {
@@ -92,10 +123,10 @@ BaseTransform::BaseTransform(const Parameters &parameters)
       planningOutput_(parameters.nx * parameters.ny) {
     forward_ = fftw_plan_dft_2d(static_cast<int>(parameters.ny), static_cast<int>(parameters.nx),
                                 fftwData(planningInput_), fftwData(planningOutput_), FFTW_FORWARD,
-                                FFTW_ESTIMATE);
+                                fftwPlanningFlags());
     inverse_ = fftw_plan_dft_2d(static_cast<int>(parameters.ny), static_cast<int>(parameters.nx),
                                 fftwData(planningInput_), fftwData(planningOutput_), FFTW_BACKWARD,
-                                FFTW_ESTIMATE);
+                                fftwPlanningFlags());
     if (!forward_ || !inverse_)
         throw std::runtime_error("FFTW could not create base-grid plans");
 }

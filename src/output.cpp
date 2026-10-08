@@ -1,6 +1,8 @@
 #include "output.hpp"
+#include "hdf5_io.hpp"
 #include "io_utils.hpp"
 #include "spectral.hpp"
+#include "vortex_diagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,6 +26,12 @@ bool finiteField(const SpectralField &field) {
 std::filesystem::path wavefunctionPath(const Parameters &parameters, std::uint64_t frame) {
     std::ostringstream name;
     name << "wavefunction_" << std::setw(8) << std::setfill('0') << frame << ".dat";
+    return parameters.dataDirectory / name.str();
+}
+
+std::filesystem::path hdf5WavefunctionPath(const Parameters &parameters, std::uint64_t frame) {
+    std::ostringstream name;
+    name << "wavefunction_" << std::setw(8) << std::setfill('0') << frame << ".h5";
     return parameters.dataDirectory / name.str();
 }
 
@@ -78,6 +86,20 @@ SpectralField readCheckpoint(const Parameters &parameters, std::uint64_t frame) 
 std::vector<Complex> readPhysicalField(const std::filesystem::path &path,
                                        const Parameters &parameters) {
     const std::size_t count = parameters.nx * parameters.ny;
+    if (path.extension() == ".h5" || path.extension() == ".hdf5") {
+        Hdf5Field field = readHdf5Field(path);
+        if (field.nx != parameters.nx || field.ny != parameters.ny)
+            throw std::runtime_error("HDF5 initial-condition dimensions do not match nx and ny");
+        const auto differs = [](double left, double right) {
+            return std::abs(left - right) >
+                   1.e-12 * std::max({1.0, std::abs(left), std::abs(right)});
+        };
+        if (differs(field.lengthX, parameters.lx()) ||
+            differs(field.lengthY, parameters.ly()))
+            throw std::runtime_error(
+                "HDF5 initial-condition domain lengths do not match the configured domain");
+        return std::move(field.wavefunction);
+    }
     std::ifstream input(path);
     if (!input)
         throw std::runtime_error("cannot open wavefunction field: " + path.string());
@@ -145,13 +167,10 @@ bool containsRunData(const std::filesystem::path &directory) {
 }
 
 bool containsSolverOutput(const std::filesystem::path &directory) {
-    constexpr std::array names{"diagnostics.csv",
-                               "spectra.csv",
-                               "fluxes.csv",
-                               "modes.csv",
-                               "forcing_summary.csv",
-                               "forcing_spectrum.csv",
-                               "resolved_parameters.txt"};
+    constexpr std::array names{
+        "diagnostics.csv",     "spectra.csv",          "fluxes.csv",
+        "modes.csv",           "vortices.csv",         "vortex_positions.csv",
+        "forcing_summary.csv", "forcing_spectrum.csv", "resolved_parameters.txt"};
     return std::any_of(names.begin(), names.end(),
                        [&](const char *name) { return std::filesystem::exists(directory / name); });
 }
@@ -215,7 +234,8 @@ RestartState readRestart(const Parameters &parameters, BaseTransform &transform,
 }
 
 void prepareOutputFiles(const Parameters &parameters, bool restarting, std::uint64_t restartFrame) {
-    constexpr std::array csvNames{"diagnostics.csv", "spectra.csv", "fluxes.csv", "modes.csv"};
+    constexpr std::array csvNames{"diagnostics.csv", "spectra.csv",  "fluxes.csv",
+                                  "modes.csv",       "vortices.csv", "vortex_positions.csv"};
     if (!restarting && !parameters.overwriteOutput &&
         (containsRunData(parameters.dataDirectory) ||
          containsSolverOutput(parameters.outputDirectory)))
@@ -251,26 +271,39 @@ void prepareOutputFiles(const Parameters &parameters, bool restarting, std::uint
                       "psi_0_1_imag,psi_1_1_real,psi_1_1_imag,psi_2_1_real,"
                       "psi_2_1_imag,psi_0_3_real,psi_0_3_imag",
                       restarting, parameters.overwriteOutput);
+    prepareVortexDiagnostics(parameters, restarting);
 }
 
 void writeWavefunction(const Parameters &parameters, BaseTransform &transform,
-                       const SpectralField &wavefunction, std::uint64_t frame) {
-    const auto path = wavefunctionPath(parameters, frame);
-    if (std::filesystem::exists(path) && !parameters.overwriteOutput)
-        throw std::runtime_error("refusing to overwrite wavefunction snapshot: " + path.string());
+                       const SpectralField &wavefunction, double time, std::uint64_t frame) {
     std::vector<Complex> physical;
     transform.inverse(wavefunction, physical);
-    const auto temporary = std::filesystem::path(path.string() + ".tmp");
-    auto out = numericOutput(temporary);
-    for (std::size_t y = 0; y < parameters.ny; ++y) {
-        for (std::size_t x = 0; x < parameters.nx; ++x) {
-            const Complex value = physical[spectralIndex(x, y, parameters.nx)];
-            out << value.real() << ' ' << value.imag();
-            out << (x + 1 == parameters.nx ? '\n' : ' ');
+    if (parameters.fieldOutputFormat != FieldOutputFormat::hdf5) {
+        const auto path = wavefunctionPath(parameters, frame);
+        if (std::filesystem::exists(path) && !parameters.overwriteOutput)
+            throw std::runtime_error("refusing to overwrite wavefunction snapshot: " +
+                                     path.string());
+        const auto temporary = std::filesystem::path(path.string() + ".tmp");
+        auto out = numericOutput(temporary);
+        for (std::size_t y = 0; y < parameters.ny; ++y) {
+            for (std::size_t x = 0; x < parameters.nx; ++x) {
+                const Complex value = physical[spectralIndex(x, y, parameters.nx)];
+                out << value.real() << ' ' << value.imag();
+                out << (x + 1 == parameters.nx ? '\n' : ' ');
+            }
         }
+        closeChecked(out, "failed while writing wavefunction snapshot");
+        std::filesystem::rename(temporary, path);
     }
-    closeChecked(out, "failed while writing wavefunction snapshot");
-    std::filesystem::rename(temporary, path);
+    if (parameters.fieldOutputFormat != FieldOutputFormat::text) {
+        const auto path = hdf5WavefunctionPath(parameters, frame);
+        if (std::filesystem::exists(path) && !parameters.overwriteOutput)
+            throw std::runtime_error("refusing to overwrite HDF5 wavefunction snapshot: " +
+                                     path.string());
+        const auto temporary = std::filesystem::path(path.string() + ".tmp");
+        writeHdf5Field(temporary, parameters, time, frame, physical);
+        std::filesystem::rename(temporary, path);
+    }
 }
 
 void writeRestart(const Parameters &parameters, double time, std::uint64_t frame,

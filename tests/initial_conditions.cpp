@@ -1,3 +1,4 @@
+#include "vortex_diagnostics.hpp"
 #include "vortex_field.hpp"
 
 #include <algorithm>
@@ -80,6 +81,20 @@ int main() {
                                 return std::isfinite(z.real()) && std::isfinite(z.imag());
                             }),
                 "imprinted field contains a non-finite value");
+        const auto detected = detectVortices(parameters, field);
+        require(detected.size() == vortices.size(),
+                "phase-winding detector found the wrong number of imprinted vortices");
+        for (const PointVortex &expected : vortices) {
+            const auto match =
+                std::find_if(detected.begin(), detected.end(), [&](const auto &found) {
+                    const double dx = std::remainder(found.x - expected.x, parameters.lx());
+                    const double dy = std::remainder(found.y - expected.y, parameters.ly());
+                    return found.charge == expected.winding &&
+                           std::hypot(dx, dy) < 1.5 * std::max(parameters.lx() / parameters.nx,
+                                                               parameters.ly() / parameters.ny);
+                });
+            require(match != detected.end(), "detected vortex position or charge is incorrect");
+        }
 
         bool rejectedNonNeutral = false;
         try {
@@ -128,8 +143,8 @@ int main() {
             std::ofstream record(trajectoryDirectory / "resolved_parameters.txt");
             record << std::setprecision(17) << "POINT_VORTEX_RUN_RECORD 1\n"
                    << "boundaryCondition periodic\n"
-                   << "boxLengthX " << parameters.lx() << '\n'
-                   << "boxLengthY " << parameters.ly() << '\n';
+                   << "domainLengthX " << parameters.lx() << '\n'
+                   << "domainLengthY " << parameters.ly() << '\n';
         }
         const auto latest = readPointVortices(trajectoryPath);
         const auto first = readPointVortices(trajectoryPath, 0);

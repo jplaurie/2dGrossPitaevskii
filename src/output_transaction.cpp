@@ -10,13 +10,15 @@
 #include <stdexcept>
 
 namespace {
-constexpr std::array csvNames{"diagnostics.csv", "spectra.csv", "fluxes.csv", "modes.csv"};
+constexpr std::array csvNames{"diagnostics.csv", "spectra.csv",  "fluxes.csv",
+                              "modes.csv",       "vortices.csv", "vortex_positions.csv"};
 
-std::array<std::filesystem::path, 2> frameFiles(const Parameters &parameters, std::uint64_t frame) {
+std::array<std::filesystem::path, 3> frameFiles(const Parameters &parameters, std::uint64_t frame) {
     std::ostringstream suffix;
     suffix << std::setw(8) << std::setfill('0') << frame;
     return {parameters.dataDirectory / ("wavefunction_" + suffix.str() + ".dat"),
-            parameters.dataDirectory / ("checkpoint_" + suffix.str() + ".bin")};
+            parameters.dataDirectory / ("checkpoint_" + suffix.str() + ".bin"),
+            parameters.dataDirectory / ("wavefunction_" + suffix.str() + ".h5")};
 }
 
 std::filesystem::path appended(const std::filesystem::path &path, const char *suffix) {
@@ -41,9 +43,11 @@ struct Journal {
     std::uint64_t frame{};
     bool previousMetadata{};
     std::uint64_t previousFrame{};
-    std::array<bool, 4> csvExisted{};
-    std::array<std::uintmax_t, 4> csvSizes{};
-    std::array<bool, 2> frameExisted{};
+    std::size_t csvCount = csvNames.size();
+    std::array<bool, csvNames.size()> csvExisted{};
+    std::array<std::uintmax_t, csvNames.size()> csvSizes{};
+    std::size_t frameFileCount = 3;
+    std::array<bool, 3> frameExisted{};
 };
 
 Journal readJournal(const Parameters &parameters) {
@@ -52,16 +56,21 @@ Journal readJournal(const Parameters &parameters) {
     Journal journal;
     if (!(in >> format >> std::quoted(directory) >> journal.frame >> journal.previousMetadata >>
           journal.previousFrame) ||
-        format != "gp2d_output_transaction_v1")
+        (format != "gp2d_output_transaction_v1" && format != "gp2d_output_transaction_v2" &&
+         format != "gp2d_output_transaction_v3"))
         throw std::runtime_error("malformed output transaction journal");
+    journal.csvCount = format == "gp2d_output_transaction_v1"   ? 4
+                       : format == "gp2d_output_transaction_v2" ? 5
+                                                                : csvNames.size();
+    journal.frameFileCount = format == "gp2d_output_transaction_v3" ? 3 : 2;
     if (std::filesystem::canonical(parameters.outputDirectory) != std::filesystem::path(directory))
         throw std::runtime_error(
             "recover the interrupted run using its original outputDirectory: " + directory);
-    for (std::size_t i = 0; i < csvNames.size(); ++i)
+    for (std::size_t i = 0; i < journal.csvCount; ++i)
         if (!(in >> journal.csvExisted[i] >> journal.csvSizes[i]))
             throw std::runtime_error("malformed CSV offsets in output journal");
-    for (auto &existed : journal.frameExisted)
-        if (!(in >> existed))
+    for (std::size_t i = 0; i < journal.frameFileCount; ++i)
+        if (!(in >> journal.frameExisted[i]))
             throw std::runtime_error("malformed frame records in output journal");
     if (!(in >> std::ws).eof())
         throw std::runtime_error("unexpected data in output transaction journal");
@@ -87,13 +96,13 @@ bool recoverOutputTransaction(const Parameters &parameters) {
         (committed && *committed != journal.previousFrame))
         throw std::runtime_error(
             "restart metadata does not match the interrupted output transaction");
-    for (std::size_t i = 0; i < csvNames.size(); ++i) {
+    for (std::size_t i = 0; i < journal.csvCount; ++i) {
         const auto path = parameters.outputDirectory / csvNames[i];
         if (journal.csvExisted[i] && (!std::filesystem::exists(path) ||
                                       std::filesystem::file_size(path) < journal.csvSizes[i]))
             throw std::runtime_error("committed CSV data is missing: " + path.string());
     }
-    for (std::size_t i = 0; i < csvNames.size(); ++i) {
+    for (std::size_t i = 0; i < journal.csvCount; ++i) {
         const auto path = parameters.outputDirectory / csvNames[i];
         if (journal.csvExisted[i])
             std::filesystem::resize_file(path, journal.csvSizes[i]);
@@ -101,7 +110,7 @@ bool recoverOutputTransaction(const Parameters &parameters) {
             std::filesystem::remove(path);
     }
     const auto files = frameFiles(parameters, journal.frame);
-    for (std::size_t i = 0; i < files.size(); ++i) {
+    for (std::size_t i = 0; i < journal.frameFileCount; ++i) {
         const auto backup = appended(files[i], ".previous");
         if (std::filesystem::exists(backup))
             std::filesystem::rename(backup, files[i]);
@@ -143,7 +152,7 @@ void beginOutputTransaction(const Parameters &parameters, std::uint64_t frame) {
     }
     const auto temporary = parameters.dataDirectory / "output_transaction.tmp";
     std::ofstream out(temporary);
-    out << "gp2d_output_transaction_v1\n"
+    out << "gp2d_output_transaction_v3\n"
         << std::quoted(std::filesystem::canonical(parameters.outputDirectory).string()) << '\n'
         << journal.frame << ' ' << journal.previousMetadata << ' ' << journal.previousFrame << '\n';
     for (std::size_t i = 0; i < csvNames.size(); ++i)

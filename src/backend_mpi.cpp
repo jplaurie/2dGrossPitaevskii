@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "fftw_utils.hpp"
+#include "host_stepper.hpp"
 #include "parallel.hpp"
 #include "spectral.hpp"
 
@@ -48,7 +49,6 @@ class MpiBackend final : public NonlinearBackend {
         for (FftwComplexField *buffer :
              {&paddedSpectrum_, &psi_, &squareSpectrum_, &projectedSquare_})
             buffer->resize(static_cast<std::size_t>(allocLocal_));
-        localNonlinearTerm_.resize(baseCount);
         inversePsi_ = makePlan(paddedSpectrum_, psi_, FFTW_BACKWARD);
         forwardSquare_ = makePlan(projectedSquare_, squareSpectrum_, FFTW_FORWARD);
         inverseSquare_ = makePlan(squareSpectrum_, projectedSquare_, FFTW_BACKWARD);
@@ -73,11 +73,86 @@ class MpiBackend final : public NonlinearBackend {
     void evaluate(const SpectralField &wavefunction, SpectralField &result) override {
         if (wavefunction.size() != parameters_.nx * parameters_.ny)
             throw std::runtime_error("invalid nonlinear input size");
-        std::fill(paddedSpectrum_.begin(), paddedSpectrum_.end(), Complex{});
-        forEachIndex(localModes_.size(), [&](std::size_t i) {
-            const LocalMode &mode = localModes_[i];
-            paddedSpectrum_[mode.paddedIndex] = wavefunction[mode.baseIndex];
-        });
+        SpectralField localState(static_cast<std::size_t>(allocLocal_));
+        for (const LocalMode &mode : localModes_)
+            localState[mode.paddedIndex] = wavefunction[mode.baseIndex];
+        SpectralField localResult;
+        evaluateLocal(localState, localResult);
+        SpectralField localBase(parameters_.nx * parameters_.ny);
+        for (const LocalMode &mode : localModes_)
+            localBase[mode.baseIndex] = localResult[mode.paddedIndex];
+        result.resize(localBase.size());
+        mpiCheck(MPI_Allreduce(localBase.data(), result.data(), static_cast<int>(localBase.size()),
+                               MPI_CXX_DOUBLE_COMPLEX, MPI_SUM, MPI_COMM_WORLD),
+                 "MPI_Allreduce standalone nonlinear result");
+    }
+
+    NoiseLayout noiseLayout() const override { return NoiseLayout::fullField; }
+
+    void initializeTimeStepping(const IntegrationCoefficients &coefficients,
+                                const SpectralField &deterministicForcing,
+                                const SpectralField &state,
+                                const std::vector<std::size_t> &) override {
+        const std::size_t baseCount = parameters_.nx * parameters_.ny;
+        if (state.size() != baseCount)
+            throw std::runtime_error("invalid initial state size");
+        state_.assign(static_cast<std::size_t>(allocLocal_), Complex{});
+        if (!deterministicForcing.empty())
+            deterministicForcing_.assign(state_.size(), Complex{});
+        const auto globalFields = coefficients.fields();
+        const auto localFields = coefficients_.fields();
+        for (std::size_t field = 0; field < globalFields.size(); ++field)
+            if (!globalFields[field]->empty())
+                localFields[field]->assign(state_.size(), Complex{});
+        for (const LocalMode &mode : localModes_) {
+            state_[mode.paddedIndex] = state[mode.baseIndex];
+            if (!deterministicForcing.empty())
+                deterministicForcing_[mode.paddedIndex] = deterministicForcing[mode.baseIndex];
+            for (std::size_t field = 0; field < globalFields.size(); ++field)
+                if (!globalFields[field]->empty())
+                    (*localFields[field])[mode.paddedIndex] =
+                        (*globalFields[field])[mode.baseIndex];
+        }
+        localNoise_.resize(state_.size());
+        workspace_.initialize(state_.size(), parameters_.nonlinearStageCount());
+    }
+
+    void advanceTimeStep(const SpectralField &noise) override {
+        if (!noise.empty() && noise.size() != parameters_.nx * parameters_.ny)
+            throw std::runtime_error("invalid MPI stochastic-noise field");
+        std::fill(localNoise_.begin(), localNoise_.end(), Complex{});
+        if (!noise.empty())
+            for (const LocalMode &mode : localModes_)
+                localNoise_[mode.paddedIndex] = noise[mode.baseIndex];
+        const auto rhs = [&](const SpectralField &input, SpectralField &output) {
+            evaluateLocal(input, output);
+            if (!deterministicForcing_.empty())
+                forEachIndex(output.size(),
+                             [&](std::size_t i) { output[i] += deterministicForcing_[i]; });
+        };
+        advanceHostTimeStep(
+            parameters_, coefficients_, state_, noise.empty() ? SpectralField{} : localNoise_,
+            workspace_, rhs, [&](SpectralField &localState) {
+                if (parameters_.hypoviscosity > 0.0 && parameters_.hypoviscosityOrder < 0.0)
+                    for (const LocalMode &mode : localModes_)
+                        if (mode.baseIndex == 0)
+                            localState[mode.paddedIndex] = Complex{};
+            });
+    }
+
+    void downloadState(SpectralField &state) override { reduceLocalField(state_, state); }
+
+    void evaluateCurrent(SpectralField &nonlinearTerm) override {
+        SpectralField localResult;
+        evaluateLocal(state_, localResult);
+        reduceLocalField(localResult, nonlinearTerm);
+    }
+
+  private:
+    void evaluateLocal(const SpectralField &localState, SpectralField &result) {
+        if (localState.size() != static_cast<std::size_t>(allocLocal_))
+            throw std::runtime_error("invalid distributed nonlinear input size");
+        std::copy(localState.begin(), localState.end(), paddedSpectrum_.begin());
         fftw_execute(inversePsi_);
         const std::size_t localCount = static_cast<std::size_t>(localRows_) * parameters_.mx();
         squarePointwise(psi_, projectedSquare_, localCount);
@@ -87,30 +162,39 @@ class MpiBackend final : public NonlinearBackend {
         fftw_execute(inverseSquare_);
         multiplyConjugatePointwise(projectedSquare_, psi_, paddedSpectrum_, localCount);
         fftw_execute(forwardNonlinear_);
-        std::fill(localNonlinearTerm_.begin(), localNonlinearTerm_.end(), Complex{});
+        result.assign(static_cast<std::size_t>(allocLocal_), Complex{});
         forEachIndex(localModes_.size(), [&](std::size_t i) {
             const LocalMode &mode = localModes_[i];
-            localNonlinearTerm_[mode.baseIndex] =
-                mode.nonlinearFactor * squareSpectrum_[mode.paddedIndex];
+            result[mode.paddedIndex] = mode.nonlinearFactor * squareSpectrum_[mode.paddedIndex];
         });
-        result.resize(localNonlinearTerm_.size());
-        mpiCheck(MPI_Allreduce(localNonlinearTerm_.data(), result.data(),
-                               static_cast<int>(localNonlinearTerm_.size()), MPI_CXX_DOUBLE_COMPLEX,
-                               MPI_SUM, MPI_COMM_WORLD),
-                 "MPI_Allreduce nonlinear result");
     }
 
-  private:
+    void reduceLocalField(const SpectralField &localField, SpectralField &globalField) const {
+        SpectralField localBase(parameters_.nx * parameters_.ny);
+        for (const LocalMode &mode : localModes_)
+            localBase[mode.baseIndex] = localField[mode.paddedIndex];
+        if (rank == 0)
+            globalField.resize(localBase.size());
+        else
+            globalField.clear();
+        mpiCheck(MPI_Reduce(localBase.data(), rank == 0 ? globalField.data() : nullptr,
+                            static_cast<int>(localBase.size()), MPI_CXX_DOUBLE_COMPLEX, MPI_SUM, 0,
+                            MPI_COMM_WORLD),
+                 "MPI_Reduce distributed spectral field");
+    }
+
     fftw_plan makePlan(FftwComplexField &input, FftwComplexField &output, int direction) {
-        return fftw_mpi_plan_dft_2d(static_cast<ptrdiff_t>(parameters_.my()),
-                                    static_cast<ptrdiff_t>(parameters_.mx()), fftwData(input),
-                                    fftwData(output), MPI_COMM_WORLD, direction, FFTW_ESTIMATE);
+        return fftw_mpi_plan_dft_2d(
+            static_cast<ptrdiff_t>(parameters_.my()), static_cast<ptrdiff_t>(parameters_.mx()),
+            fftwData(input), fftwData(output), MPI_COMM_WORLD, direction, fftwPlanningFlags());
     }
 
     Parameters parameters_;
     ptrdiff_t allocLocal_ = 0, localRows_ = 0, firstRow_ = 0;
     FftwComplexField paddedSpectrum_, psi_, squareSpectrum_, projectedSquare_;
-    SpectralField localNonlinearTerm_;
+    SpectralField state_, deterministicForcing_, localNoise_;
+    IntegrationCoefficients coefficients_;
+    HostIntegrationWorkspace workspace_;
     std::vector<LocalMode> localModes_;
     FftwPlan inversePsi_, forwardSquare_, inverseSquare_, forwardNonlinear_;
 };
@@ -136,6 +220,9 @@ void backendInitialize(int &argc, char **&argv) {
 }
 
 void backendFinalize() {
+    fftw_mpi_gather_wisdom(MPI_COMM_WORLD);
+    if (rank == 0)
+        saveFftwWisdom();
     fftw_mpi_cleanup();
 #ifdef GP2D_HAVE_FFTW_THREADS
     if (fftwThreadsInitialized) {
@@ -174,5 +261,7 @@ std::unique_ptr<NonlinearBackend> makeBackend(const Parameters &parameters) {
         fftw_plan_with_nthreads(threads);
 #endif
     }
+    configureFftw(parameters, rank == 0);
+    fftw_mpi_broadcast_wisdom(MPI_COMM_WORLD);
     return std::make_unique<MpiBackend>(parameters);
 }

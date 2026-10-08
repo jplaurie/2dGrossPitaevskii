@@ -31,8 +31,7 @@ std::vector<std::string> splitCsv(const std::string &line) {
     return fields;
 }
 
-void readPointVortexRunRecord(const std::filesystem::path &path,
-                              PointVortexMetadata &metadata) {
+void readPointVortexRunRecord(const std::filesystem::path &path, PointVortexMetadata &metadata) {
     std::ifstream input(path);
     if (!input)
         return;
@@ -43,11 +42,12 @@ void readPointVortexRunRecord(const std::filesystem::path &path,
             if (!(input >> value))
                 throw std::runtime_error("invalid boundaryCondition in " + path.string());
             metadata.geometry = value;
-        } else if (key == "boxLengthX" || key == "boxLengthY") {
+        } else if (key == "boxLengthX" || key == "boxLengthY" || key == "domainLengthX" ||
+                   key == "domainLengthY") {
             double value = 0.0;
             if (!(input >> value) || !std::isfinite(value) || value <= 0.0)
                 throw std::runtime_error("invalid " + key + " in " + path.string());
-            if (key == "boxLengthX")
+            if (key == "boxLengthX" || key == "domainLengthX")
                 metadata.lengthX = value;
             else
                 metadata.lengthY = value;
@@ -57,8 +57,7 @@ void readPointVortexRunRecord(const std::filesystem::path &path,
         }
     }
     if (input.bad())
-        throw std::runtime_error("failed while reading PointVortex run record: " +
-                                 path.string());
+        throw std::runtime_error("failed while reading PointVortex run record: " + path.string());
 }
 
 template <class T> T parseField(const std::string &text, const std::string &description) {
@@ -127,8 +126,7 @@ PointVortexMetadata readPointVortexMetadata(const std::filesystem::path &path) {
         if (first == std::string::npos)
             continue;
         if (line[first] != '#') {
-            metadata.trajectory =
-                line.find("time,frame,index,x,y,circulation", first) == first;
+            metadata.trajectory = line.find("time,frame,index,x,y,circulation", first) == first;
             break;
         }
 
@@ -159,8 +157,8 @@ PointVortexMetadata readPointVortexMetadata(const std::filesystem::path &path) {
     return metadata;
 }
 
-void validatePointVortexDomain(const PointVortexMetadata &metadata,
-                               const Parameters &parameters, double coordinateScale) {
+void validatePointVortexDomain(const PointVortexMetadata &metadata, const Parameters &parameters,
+                               double coordinateScale) {
     if (!(coordinateScale > 0.0) || !std::isfinite(coordinateScale))
         throw std::invalid_argument("coordinate scale must be finite and positive");
     if (metadata.geometry && *metadata.geometry != "periodic")
@@ -169,16 +167,15 @@ void validatePointVortexDomain(const PointVortexMetadata &metadata,
                                     "periodic PointVortex state");
 
     const auto significantlyDifferent = [](double left, double right) {
-        return std::abs(left - right) >
-               1.0e-10 * std::max({1.0, std::abs(left), std::abs(right)});
+        return std::abs(left - right) > 1.0e-10 * std::max({1.0, std::abs(left), std::abs(right)});
     };
     const auto checkLength = [&](const std::optional<double> &source, double target,
                                  const char *axis) {
         if (source && significantlyDifferent(coordinateScale * *source, target)) {
             std::ostringstream message;
-            message << "scaled PointVortex " << axis << " length "
-                    << coordinateScale * *source << " does not match GP " << axis << " length "
-                    << target << "; use matching domains or set --coordinate-scale";
+            message << "scaled PointVortex " << axis << " length " << coordinateScale * *source
+                    << " does not match GP " << axis << " length " << target
+                    << "; use matching domains or set --coordinate-scale";
             throw std::invalid_argument(message.str());
         }
     };

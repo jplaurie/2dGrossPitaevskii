@@ -4,7 +4,6 @@
 #include "fftw_utils.hpp"
 #include "output.hpp"
 
-#include <array>
 #include <memory>
 #include <random>
 #include <vector>
@@ -20,24 +19,21 @@ class Solver {
     void buildIntegrationCoefficients();
     void buildForcing();
     void generateNoise(SpectralField &noise);
-    void rightHandSide(const SpectralField &input, SpectralField &output);
-    void step(SpectralField &wavefunction);
+    void step();
     RestartState prepareRun();
     void validateRunBounds(const RestartState &state) const;
     void restoreRandomState(const RestartState &state);
-    void initializeDeviceTimeStepping(const SpectralField &wavefunction);
+    void initializeTimeStepping(const SpectralField &wavefunction);
     void writeState(const RestartState &state);
     double writeOutputFrame(const RestartState &state, DiagnosticsAverages &averages);
     SpectralField makeBenchmarkState() const;
 
     Parameters parameters_;
     std::unique_ptr<NonlinearBackend> backend_;
-    BaseTransform baseTransform_;
+    std::unique_ptr<BaseTransform> baseTransform_;
     SpectralField linearOperator_;
     IntegrationCoefficients coefficients_;
     SpectralField noise_;
-    std::array<SpectralField, 4> nonlinearStages_;
-    std::array<SpectralField, 3> stageStates_;
     SpectralField diagnosticNonlinearTerm_, deterministicForcing_;
     std::vector<double> forcingAmplitude_, stochasticNoiseScale_;
     std::vector<double> stochasticQuarticInjectionWeight_;

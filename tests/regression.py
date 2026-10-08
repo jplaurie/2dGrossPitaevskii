@@ -77,11 +77,27 @@ def initial_field(path, nx, ny):
 
 def cpu_checks(root, cpu):
     full = root / "full"
-    run(cpu, write_params(full))
+    run(cpu, write_params(full, writeVortexDiagnostics="true"))
     with (full / "output/diagnostics.csv").open() as stream:
         rows = list(csv.DictReader(stream))
     assert [row["frame"] for row in rows] == ["1", "2"]
     assert all(math.isfinite(float(row["total_energy"])) for row in rows)
+    with (full / "output/vortices.csv").open() as stream:
+        vortex_rows = list(csv.DictReader(stream))
+    assert [row["frame"] for row in vortex_rows] == ["1", "2"]
+    assert all(int(row["positive_vortices"]) >= 0 and
+               int(row["negative_vortices"]) >= 0 for row in vortex_rows)
+    with (full / "output/vortex_positions.csv").open() as stream:
+        position_rows = list(csv.DictReader(stream))
+    for vortex_row in vortex_rows:
+        frame_positions = [row for row in position_rows
+                           if row["frame"] == vortex_row["frame"]]
+        assert len(frame_positions) == int(vortex_row["total_vortices"])
+    assert all(int(row["circulation"]) in (-1, 1) and
+               0 <= float(row["x"]) < 1.5 * 2 * math.pi and
+               0 <= float(row["y"]) < 2 * math.pi and
+               math.isfinite(float(row["core_residual"]))
+               for row in position_rows)
     assert "kinetic_energy" in rows[0]
     assert all(math.isfinite(float(row["expected_full_energy_injection"]))
                for row in rows)
@@ -173,7 +189,8 @@ def cpu_checks(root, cpu):
     recovery = root / "recovery"
     recovery_params = write_params(recovery, numberOfSteps=2)
     run(cpu, recovery_params)
-    csv_names = ("diagnostics.csv", "spectra.csv", "fluxes.csv", "modes.csv")
+    csv_names = ("diagnostics.csv", "spectra.csv", "fluxes.csv", "modes.csv",
+                 "vortices.csv", "vortex_positions.csv")
     records = []
     for name in csv_names:
         path = recovery / "output" / name
@@ -185,14 +202,24 @@ def cpu_checks(root, cpu):
                 stream.write(b"interrupted row\n")
     (recovery / "data/wavefunction_00000002.dat").write_text("partial\n")
     (recovery / "data/checkpoint_00000002.bin").write_bytes(b"partial")
-    journal = ["gp2d_output_transaction_v1",
+    journal = ["gp2d_output_transaction_v3",
                f'"{(recovery / "output").resolve()}"', "2 1 1"]
     journal.extend(f"{int(exists)} {size}" for exists, size in records)
-    journal.extend(("0", "0"))
+    journal.extend(("0", "0", "0"))
     (recovery / "data/output_transaction.txt").write_text("\n".join(journal) + "\n")
     recovered = run(cpu, recovery_params)
     assert "recovered interrupted output frame 2" in recovered.stdout
     assert checkpoint(full) == checkpoint(recovery)
+
+    # Expensive FFTW planning can be amortized across runs through wisdom.
+    wisdom = root / "wisdom"
+    wisdom_file = wisdom / "fftw.wisdom"
+    wisdom_params = write_params(
+        wisdom, numberOfSteps=1, outputIntervalSteps=1, forcingEnabled="false",
+        fftwPlanning="measure", fftwWisdomFile=wisdom_file)
+    run(cpu, wisdom_params)
+    assert wisdom_file.exists() and wisdom_file.stat().st_size > 0
+    run(cpu, wisdom_params)
 
     # Frame collisions are detected before any diagnostic append is committed.
     collision = root / "collision"
@@ -232,6 +259,8 @@ def backend_checks(root, cpu, candidate, tolerance):
                                forcingWidth=.8)),
         ("etd4_gaussian", dict(integrator="etd4", forcingProfile="gaussian",
                                forcingWidth=.8)),
+        ("etd4_cuda_graph", dict(integrator="etd4", forcingProfile="gaussian",
+                                 forcingWidth=.8, cudaGraphEnabled="true")),
         ("rk2_gaussian", dict(integrator="rk2", forcingProfile="gaussian",
                               forcingWidth=.8)),
         ("annulus", dict(forcingProfile="annulus")),

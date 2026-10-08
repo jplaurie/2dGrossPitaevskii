@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "fftw_utils.hpp"
+#include "host_stepper.hpp"
 #include "parallel.hpp"
 #include "spectral.hpp"
 
@@ -61,23 +62,57 @@ class CpuBackend final : public NonlinearBackend {
         });
     }
 
+    NoiseLayout noiseLayout() const override { return NoiseLayout::fullField; }
+
+    void initializeTimeStepping(const IntegrationCoefficients &coefficients,
+                                const SpectralField &deterministicForcing,
+                                const SpectralField &state,
+                                const std::vector<std::size_t> &) override {
+        if (state.size() != parameters_.nx * parameters_.ny)
+            throw std::runtime_error("invalid initial state size");
+        coefficients_ = coefficients;
+        deterministicForcing_ = deterministicForcing;
+        state_ = state;
+        workspace_.initialize(state_.size(), parameters_.nonlinearStageCount());
+    }
+
+    void advanceTimeStep(const SpectralField &noise) override {
+        const auto rhs = [&](const SpectralField &input, SpectralField &output) {
+            evaluate(input, output);
+            if (!deterministicForcing_.empty())
+                forEachIndex(output.size(),
+                             [&](std::size_t i) { output[i] += deterministicForcing_[i]; });
+        };
+        advanceHostTimeStep(
+            parameters_, coefficients_, state_, noise, workspace_, rhs,
+            [&](SpectralField &state) { enforceStateConstraints(state, parameters_); });
+    }
+
+    void downloadState(SpectralField &state) override { state = state_; }
+
+    void evaluateCurrent(SpectralField &nonlinearTerm) override { evaluate(state_, nonlinearTerm); }
+
   private:
     fftw_plan makePlan(FftwComplexField &input, FftwComplexField &output, int direction) {
         return fftw_plan_dft_2d(static_cast<int>(parameters_.my()),
                                 static_cast<int>(parameters_.mx()), fftwData(input),
-                                fftwData(output), direction, FFTW_ESTIMATE);
+                                fftwData(output), direction, fftwPlanningFlags());
     }
 
     Parameters parameters_;
     FftwComplexField paddedSpectrum_, psi_, squareSpectrum_, projectedSquare_;
     std::vector<std::size_t> paddedIndexByBaseMode_;
     SpectralField nonlinearMultiplier_;
+    IntegrationCoefficients coefficients_;
+    SpectralField state_, deterministicForcing_;
+    HostIntegrationWorkspace workspace_;
     FftwPlan inversePsi_, forwardSquare_, inverseSquare_, forwardNonlinear_;
 };
 } // namespace
 
 void backendInitialize(int &, char **&) {}
 void backendFinalize() {
+    saveFftwWisdom();
 #ifdef GP2D_HAVE_FFTW_THREADS
     if (fftwThreadsInitialized) {
         fftw_cleanup_threads();
@@ -111,5 +146,6 @@ std::unique_ptr<NonlinearBackend> makeBackend(const Parameters &parameters) {
         fftw_plan_with_nthreads(threads);
 #endif
     }
+    configureFftw(parameters);
     return std::make_unique<CpuBackend>(parameters);
 }

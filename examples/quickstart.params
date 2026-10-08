@@ -28,6 +28,13 @@ targetWaveActionInjectionRate 0
 randomSeed 123456
 
 writeModeDiagnostics true
+writeVortexDiagnostics false
+fieldOutputFormat text
+hdf5CompressionLevel 0
+# For long production jobs, use "measure" plus a persistent wisdom path.
+fftwPlanning estimate
+fftwWisdomFile quickstart.fftw-wisdom
+cudaGraphEnabled false
 threadCount 1
 overwriteOutput false
 dataDirectory data/quickstart

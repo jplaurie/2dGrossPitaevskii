@@ -28,6 +28,10 @@ template <class T> struct FftwAllocator {
 
 using FftwComplexField = std::vector<Complex, FftwAllocator<Complex>>;
 
+void configureFftw(const Parameters &parameters, bool importWisdom = true);
+void saveFftwWisdom();
+[[nodiscard]] unsigned fftwPlanningFlags();
+
 class FftwPlan {
   public:
     FftwPlan() = default;

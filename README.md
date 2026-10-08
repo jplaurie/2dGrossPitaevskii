@@ -4,7 +4,7 @@ A C++20 solver for a complex Gross–Pitaevskii field on a doubly periodic
 domain. A shared numerical model is available through OpenMP, hybrid
 MPI/OpenMP, and CUDA backends.
 
-Current release: `v0.4.0` (2026-10-04).
+Current release: `v0.5.0` (2026-10-08).
 
 Five executables share one model, parameter format, set of time integrators,
 and output format:
@@ -16,6 +16,9 @@ and output format:
 | `gross_pitaevskii_mpi` | FFTW-MPI, with optional OpenMP | Distributed-memory runs |
 | `gross_pitaevskii_cuda` | FP64 CUDA and cuFFT | Full-double NVIDIA GPU runs |
 | `gross_pitaevskii_cuda_mixed` | FP64 state/integration, FP32 FFT path | Faster NVIDIA GPU runs when mixed precision is acceptable |
+
+When HDF5 is available, `gp2d_hdf5_export` converts field snapshots back to
+solver text fields or directly plottable gnuplot tables.
 
 The solver provides dealiased pseudo-spectral nonlinear evaluation, four
 fixed-step exponential or integrating-factor schemes, reproducible stochastic
@@ -156,12 +159,13 @@ The CPU build requires CMake 3.20+, a C++20 compiler, and FFTW3 development
 headers and libraries. OpenMP and FFTW's threads library are optional. The
 hybrid executable also needs MPI and FFTW-MPI. The CUDA executables need the
 NVIDIA CUDA Toolkit and cuFFT, plus an NVIDIA GPU at run time. Python 3 enables
-the end-to-end regression tests.
+the end-to-end regression tests. HDF5 is optional and enables compressed field
+snapshots, HDF5 initial conditions, and the `gp2d_hdf5_export` utility.
 
 For example, the required packages can be installed on Arch Linux with:
 
 ```bash
-sudo pacman -S cmake gcc fftw openmpi fftw-openmpi cuda python
+sudo pacman -S cmake gcc fftw hdf5 openmpi fftw-openmpi cuda python
 ```
 
 ## Build and test
@@ -192,6 +196,7 @@ compiler is found. Useful options are:
 -DGP2D_OPENMP=OFF
 -DGP2D_MPI=OFF
 -DGP2D_CUDA=OFF
+-DGP2D_HDF5=OFF
 -DGP2D_CUDA_ARCHITECTURES=<CUDA architecture>
 -DGP2D_BACKEND_TESTS=ON
 ```
@@ -270,13 +275,19 @@ mpirun -n 2 ./build/release/gross_pitaevskii_mpi run.params
 
 `threadCount` selects OpenMP and threaded-FFTW threads per process; zero uses
 the OpenMP runtime default, including `OMP_NUM_THREADS` when it is set. For
-MPI, plan for `ranks * threadCount` CPU cores. Only rank zero writes files.
+MPI, plan for `ranks * threadCount` CPU cores. Spectral state and ETD stage
+fields remain slab-distributed; full fields are gathered to rank zero only at
+output frames. Only rank zero writes files.
 CUDA keeps time-integration stages and nonlinear FFTs on the device; host
 transfers occur for output. Stochastic increments retain the shared host RNG
 sequence but upload only forced-mode values before being scattered on the
 device. Set `GP2D_CUDA_PROFILE=1` to report average GPU step and noise
 preparation times. `GP2D_CUDA_FULL_NOISE=1` restores the full-field transfer
-for performance comparisons.
+for performance comparisons. Set `cudaGraphEnabled true` to capture and replay
+the fixed GPU timestep as a CUDA graph. This is most useful for long production
+runs, where its one-time setup cost is amortized over many steps. Large FFTs may
+limit the speedup, so compare elapsed time between representative output frames;
+leave it disabled when inspecting individual kernel launches.
 
 ## Parameter files
 
@@ -308,6 +319,12 @@ are case-sensitive, and invalid keys, values, or extra fields stop the run.
 | `targetWaveActionInjectionRate` | Normalize stochastic forcing when positive |
 | `randomSeed` | Reproducible 64-bit seed; zero chooses and records a time-based seed |
 | `writeModeDiagnostics` | Write selected complex Fourier modes |
+| `writeVortexDiagnostics` | Write winding counts and sub-cell vortex positions |
+| `fieldOutputFormat` | Physical snapshots: `text`, `hdf5`, or `both` |
+| `hdf5CompressionLevel` | Deflate level from 0 (off) through 9 |
+| `fftwPlanning` | FFTW planner: `estimate`, `measure`, or `patient` |
+| `fftwWisdomFile` | Optional FFTW wisdom file to import and update |
+| `cudaGraphEnabled` | Capture/replay the CUDA timestep (CUDA backends only) |
 | `threadCount` | Host threads per process; zero uses the runtime default |
 | `overwriteOutput` | Permit frame replacement; it does not disable restart detection |
 | `initialConditionFile` | Optional physical complex field |
@@ -318,14 +335,18 @@ the four modes with `|kx index| = |ky index| = forcingWavenumber`; the other
 profiles use circular complex Gaussian, white-in-time forcing.
 Forcing-specific numeric constraints are checked only when `forcingEnabled` is
 true; disabled forcing parameters are parsed but otherwise ignored.
+`measure` and `patient` spend more time planning but can improve repeated FFT
+performance; `fftwWisdomFile` persists those plans and MPI broadcasts/gathers
+wisdom across ranks.
 For negative `hypoviscosityOrder`, the hypoviscous multiplier is singular at
 `k=0`. The mean mode is therefore explicitly set to zero on initialization and
 after every time step.
 
-An initial-condition file contains `2*nx*ny` whitespace-delimited numbers,
-ordered as row-major `real imag` pairs. A `wavefunction_NNNNNNNN.dat` snapshot
-has this format and can be used directly as an initial condition. Relative
-paths are resolved from the directory in which the executable is launched.
+An initial-condition file may be either an HDF5 snapshot or contain `2*nx*ny`
+whitespace-delimited numbers ordered as row-major `real imag` pairs. Both
+`wavefunction_NNNNNNNN.dat` and `.h5` snapshots can be used directly as an
+initial condition. Relative paths are resolved from the directory in which the
+executable is launched.
 
 ## Output and restart
 
@@ -334,14 +355,45 @@ Fresh runs save frame zero, then the requested cadence and final step.
 | Location | Contents |
 | --- | --- |
 | `dataDirectory/wavefunction_NNNNNNNN.dat` | Physical `real imag` pairs (`ny` by `2*nx`) |
+| `dataDirectory/wavefunction_NNNNNNNN.h5` | Optional physical `[ny,nx,2]` double dataset and metadata |
 | `dataDirectory/checkpoint_NNNNNNNN.bin` | Normalized complex spectral state |
 | `dataDirectory/restart_state.txt` | Latest time, frame, grid identity, and RNG state |
 | `outputDirectory/diagnostics.csv` | Hamiltonian components, wave action, and damping rates |
+| `outputDirectory/vortices.csv` | Optional positive/negative phase-winding counts |
+| `outputDirectory/vortex_positions.csv` | Optional charge and sub-cell position of every detected vortex |
 | `outputDirectory/spectra.csv` | Wave-action and quadratic-energy shell spectra |
 | `outputDirectory/fluxes.csv` | Wave-action and full Hamiltonian-energy fluxes |
 | `outputDirectory/modes.csv` | Optional selected complex Fourier modes |
 | `outputDirectory/forcing_*.csv` | Forcing summary and spectrum |
 | `outputDirectory/segments/` | Per-invocation resolved parameters and forcing records |
+
+HDF5 snapshots are written atomically as one file per output frame. The
+`/wavefunction` dataset stores real and imaginary components in its last
+dimension; grid dimensions, physical lengths, time, and frame are attributes.
+For production runs, `fieldOutputFormat hdf5` avoids the larger text snapshots;
+`both` is convenient while checking an analysis workflow.
+
+Convert an HDF5 frame back to a solver-compatible field or to a table that
+gnuplot can read directly:
+
+```bash
+./build/release/gp2d_hdf5_export wavefunction_00000010.h5 frame.dat
+./build/release/gp2d_hdf5_export wavefunction_00000010.h5 frame.gnuplot \
+  --format gnuplot
+gnuplot -e "plot 'frame.gnuplot' using 1:2:5 with image"
+```
+
+The gnuplot table columns are `x y real imag density phase`. CSV diagnostics
+remain unchanged and can still be plotted directly.
+
+Vortex positions are obtained from phase winding around each periodic grid
+plaquette, followed by a bilinear solve for the zero of the complex field
+inside that plaquette. `core_residual` records the magnitude left at the
+estimated zero and is useful for filtering poorly resolved cores. The
+`index` is local to one frame; persistent trajectory IDs are not yet assigned.
+The first six columns use the existing PointVortex trajectory schema
+(`time,frame,index,x,y,circulation`), so `vortex_positions.csv` can be passed
+directly to the vortex-imprint tooling with `--frame`.
 
 Here `quadratic_energy` means the kinetic-plus-chemical-potential part,
 `area * sum_k (-c*|k|^2 + mu)*|psi_k|^2`. The diagnostics keep its kinetic
@@ -363,6 +415,9 @@ When `restart_state.txt` exists, the solver resumes automatically.
 continues. Matching `nx`, `ny`, and `aspectRatio` are required; physical
 parameters may change between invocations. Output frames are journaled and
 committed atomically, so a partially written frame is rolled back on restart.
+Launch the replacement executable from the same working directory, or change
+`dataDirectory` and `outputDirectory` to absolute paths, so relative paths still
+refer to the original run.
 Use new data and output directories for an independent run. Existing restart
 metadata always resumes that run; `overwriteOutput` only permits replacement
 of colliding output files.
@@ -402,8 +457,12 @@ src/
   spectral.cpp/.hpp           Fourier indexing and retained-band rules
   fftw_utils.cpp/.hpp         base-grid complex FFTW transforms
   solver.cpp/.hpp             linear operator, forcing, and time stepping
+  host_stepper.hpp            shared host ETD/RK timestep orchestration
   integrator.hpp              shared CPU/CUDA stage formulas
   diagnostics.cpp             energies, spectra, fluxes, and forcing records
+  vortex_diagnostics.cpp      phase winding and sub-cell vortex positions
+  hdf5_io.cpp/.hpp            optional HDF5 field reader/writer
+  hdf5_export.cpp             HDF5-to-field/gnuplot conversion utility
   output.cpp/.hpp             snapshots, checkpoints, and restart loading
   output_transaction.cpp      atomic output recovery and run history
   backend.hpp                 common nonlinear-backend interface
@@ -423,6 +482,8 @@ tests/
   numerics.cpp                direct-DFT nonlinear verification
   initial_conditions.cpp      periodic-phase and core-profile tests
   regression.py               restart and cross-backend comparisons
+  convergence.py              exact-solution temporal-order checks
+  hdf5_output.py              HDF5 round-trip and exporter tests
 ```
 
 Configuration text is converted at the input boundary into typed `Integrator`
@@ -443,6 +504,7 @@ the dates below are the dates of the tagged commits.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| `v0.5.0` | 2026-10-08 | Unified backend time stepping, distributed MPI state, FFTW planning/wisdom, CUDA graphs, convergence and CI coverage, HDF5 field I/O/export, and periodic 2D vortex detection with sub-cell positions. |
 | `v0.4.0` | 2026-10-04 | Added the mixed-precision CUDA path, reproducible multi-backend benchmarks, performance plots and mixed/full-precision regression coverage. |
 | `v0.3.0` | 2026-09-30 | Added vortex-imprinted initial-condition generation and comoving imaginary-time relaxation, with tests and examples; reorganized the solver for readability. |
 | `v0.2.0` | 2026-09-16 | Reduced CUDA transfers for stochastic forcing and added reusable plotting, diagnostic-notebook and movie tools. |

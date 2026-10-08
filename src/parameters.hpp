@@ -7,6 +7,8 @@
 
 enum class Integrator { etd2, etd3, etd4, integratingFactorRk2 };
 enum class ForcingProfile { annulus, gaussian, exponential, logNormal, singleMode };
+enum class FftwPlanning { estimate, measure, patient };
+enum class FieldOutputFormat { text, hdf5, both };
 
 struct Parameters {
     std::size_t nx = 512;
@@ -43,6 +45,12 @@ struct Parameters {
     std::uint64_t randomSeed = 0;
 
     bool writeModeDiagnostics = false;
+    bool writeVortexDiagnostics = false;
+    FieldOutputFormat fieldOutputFormat = FieldOutputFormat::text;
+    int hdf5CompressionLevel = 0;
+    FftwPlanning fftwPlanning = FftwPlanning::estimate;
+    std::filesystem::path fftwWisdomFile;
+    bool cudaGraphEnabled = false;
     int threadCount = 0;
     bool overwriteOutput = false;
     std::filesystem::path initialConditionFile;
@@ -62,6 +70,8 @@ struct Parameters {
 
 [[nodiscard]] const char *integratorName(Integrator integrator);
 [[nodiscard]] const char *forcingProfileName(ForcingProfile profile);
+[[nodiscard]] const char *fftwPlanningName(FftwPlanning planning);
+[[nodiscard]] const char *fieldOutputFormatName(FieldOutputFormat format);
 Parameters readParameters(const std::filesystem::path &path,
                           bool requireExistingInitialCondition = true);
 void validateParameters(const Parameters &parameters, bool requireExistingInitialCondition = true);
