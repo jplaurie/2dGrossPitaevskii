@@ -480,6 +480,7 @@ initial_conditions/
 tests/
   parameters.cpp              parameter parsing and validation tests
   numerics.cpp                direct-DFT nonlinear verification
+  runtime_guards.cpp          transaction ordering and workspace reuse tests
   initial_conditions.cpp      periodic-phase and core-profile tests
   regression.py               restart and cross-backend comparisons
   convergence.py              exact-solution temporal-order checks
@@ -504,7 +505,7 @@ the dates below are the dates of the tagged commits.
 
 | Version | Date | Changes |
 | --- | --- | --- |
-| `v0.5.0` | 2026-10-08 | Unified backend time stepping, distributed MPI state, FFTW planning/wisdom, CUDA graphs, convergence and CI coverage, HDF5 field I/O/export, and periodic 2D vortex detection with sub-cell positions. |
+| `v0.5.0` | 2026-10-08 | Unified backend time stepping, distributed MPI state, FFTW planning/wisdom, CUDA graphs, convergence and CI coverage, HDF5 field I/O/export, periodic 2D vortex detection, and defensive provenance, exporter, transaction, and workspace checks. |
 | `v0.4.0` | 2026-10-04 | Added the mixed-precision CUDA path, reproducible multi-backend benchmarks, performance plots and mixed/full-precision regression coverage. |
 | `v0.3.0` | 2026-09-30 | Added vortex-imprinted initial-condition generation and comoving imaginary-time relaxation, with tests and examples; reorganized the solver for readability. |
 | `v0.2.0` | 2026-09-16 | Reduced CUDA transfers for stochastic forcing and added reusable plotting, diagnostic-notebook and movie tools. |

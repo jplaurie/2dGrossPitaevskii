@@ -7,16 +7,23 @@ set(GP2D_GIT_DIRTY "unknown")
 if(Git_FOUND)
   execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    OUTPUT_VARIABLE GP2D_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GP2D_GIT_COMMIT_CANDIDATE OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE GP2D_GIT_COMMIT_RESULT
     ERROR_QUIET)
+  if(GP2D_GIT_COMMIT_RESULT EQUAL 0)
+    set(GP2D_GIT_COMMIT "${GP2D_GIT_COMMIT_CANDIDATE}")
+  endif()
   execute_process(COMMAND ${GIT_EXECUTABLE} status --porcelain
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE GP2D_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE GP2D_GIT_STATUS_RESULT
     ERROR_QUIET)
-  if(GP2D_GIT_STATUS STREQUAL "")
-    set(GP2D_GIT_DIRTY "false")
-  else()
-    set(GP2D_GIT_DIRTY "true")
+  if(GP2D_GIT_STATUS_RESULT EQUAL 0)
+    if(GP2D_GIT_STATUS STREQUAL "")
+      set(GP2D_GIT_DIRTY "false")
+    else()
+      set(GP2D_GIT_DIRTY "true")
+    endif()
   endif()
 endif()
 
@@ -225,6 +232,13 @@ if(BUILD_TESTING)
     target_compile_definitions(gp2d_numerics_tests PRIVATE GP2D_HAVE_FFTW_THREADS=1)
   endif()
   add_test(NAME nonlinear_direct_dft COMMAND gp2d_numerics_tests)
+  add_executable(gp2d_runtime_guard_tests tests/runtime_guards.cpp)
+  target_link_libraries(gp2d_runtime_guard_tests PRIVATE gp2d_common)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(gp2d_runtime_guard_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME runtime_guards COMMAND gp2d_runtime_guard_tests)
+
   add_executable(gp2d_initial_condition_tests tests/initial_conditions.cpp)
   target_link_libraries(gp2d_initial_condition_tests PRIVATE gp2d_initial_conditions)
   add_test(NAME initial_condition_math COMMAND gp2d_initial_condition_tests)
