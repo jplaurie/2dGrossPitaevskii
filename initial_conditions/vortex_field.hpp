@@ -34,8 +34,8 @@ std::vector<PointVortex>
 readPointVortices(const std::filesystem::path &path,
                   std::optional<std::uint64_t> trajectoryFrame = std::nullopt);
 PointVortexMetadata readPointVortexMetadata(const std::filesystem::path &path);
-void validatePointVortexDomain(const PointVortexMetadata &metadata,
-                               const Parameters &parameters, double coordinateScale);
+void validatePointVortexDomain(const PointVortexMetadata &metadata, const Parameters &parameters,
+                               double coordinateScale);
 
 double padeVortexDensity(double radiusInHealingLengths);
 

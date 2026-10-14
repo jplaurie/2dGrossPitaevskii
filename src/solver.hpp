@@ -25,6 +25,7 @@ class Solver {
     void restoreRandomState(const RestartState &state);
     void initializeTimeStepping(const SpectralField &wavefunction);
     void writeState(const RestartState &state);
+    void writeState(const RestartState &state, const std::vector<Complex> &physical);
     double writeOutputFrame(const RestartState &state, DiagnosticsAverages &averages);
     SpectralField makeBenchmarkState() const;
 

@@ -94,8 +94,7 @@ std::vector<Complex> readPhysicalField(const std::filesystem::path &path,
             return std::abs(left - right) >
                    1.e-12 * std::max({1.0, std::abs(left), std::abs(right)});
         };
-        if (differs(field.lengthX, parameters.lx()) ||
-            differs(field.lengthY, parameters.ly()))
+        if (differs(field.lengthX, parameters.lx()) || differs(field.lengthY, parameters.ly()))
             throw std::runtime_error(
                 "HDF5 initial-condition domain lengths do not match the configured domain");
         return std::move(field.wavefunction);
@@ -274,10 +273,10 @@ void prepareOutputFiles(const Parameters &parameters, bool restarting, std::uint
     prepareVortexDiagnostics(parameters, restarting);
 }
 
-void writeWavefunction(const Parameters &parameters, BaseTransform &transform,
-                       const SpectralField &wavefunction, double time, std::uint64_t frame) {
-    std::vector<Complex> physical;
-    transform.inverse(wavefunction, physical);
+void writePhysicalWavefunction(const Parameters &parameters, const std::vector<Complex> &physical,
+                               double time, std::uint64_t frame) {
+    if (physical.size() != parameters.nx * parameters.ny)
+        throw std::runtime_error("invalid physical wavefunction size");
     if (parameters.fieldOutputFormat != FieldOutputFormat::hdf5) {
         const auto path = wavefunctionPath(parameters, frame);
         if (std::filesystem::exists(path) && !parameters.overwriteOutput)

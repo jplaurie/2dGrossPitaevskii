@@ -108,12 +108,10 @@ void prepareVortexDiagnostics(const Parameters &parameters, bool restarting) {
                parameters.overwriteOutput);
 }
 
-void writeVortexDiagnostics(const Parameters &parameters, BaseTransform &transform, double time,
-                            std::uint64_t frame, const SpectralField &wavefunction) {
+void writeVortexDiagnostics(const Parameters &parameters, double time, std::uint64_t frame,
+                            const std::vector<Complex> &physical) {
     if (!parameters.writeVortexDiagnostics)
         return;
-    std::vector<Complex> physical;
-    transform.inverse(wavefunction, physical);
     const std::vector<DetectedVortex> vortices = detectVortices(parameters, physical);
     std::uint64_t positive = 0, negative = 0;
     for (const DetectedVortex &vortex : vortices) {

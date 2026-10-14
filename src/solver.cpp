@@ -305,7 +305,13 @@ void Solver::step() {
 }
 
 void Solver::writeState(const RestartState &state) {
-    writeWavefunction(parameters_, *baseTransform_, state.wavefunction, state.time, state.frame);
+    std::vector<Complex> physical;
+    baseTransform_->inverse(state.wavefunction, physical);
+    writeState(state, physical);
+}
+
+void Solver::writeState(const RestartState &state, const std::vector<Complex> &physical) {
+    writePhysicalWavefunction(parameters_, physical, state.time, state.frame);
     std::ostringstream randomState, distributionState;
     randomState << random_;
     distributionState << normal_;
@@ -418,9 +424,10 @@ double Solver::writeOutputFrame(const RestartState &state, DiagnosticsAverages &
     const double energy = writeDiagnostics(
         parameters_, *baseTransform_, state.time, state.frame, state.wavefunction,
         diagnosticNonlinearTerm_, forcingAmplitude_, stochasticQuarticInjectionWeight_, averages);
-    writeVortexDiagnostics(parameters_, *baseTransform_, state.time, state.frame,
-                           state.wavefunction);
-    writeState(state);
+    std::vector<Complex> physical;
+    baseTransform_->inverse(state.wavefunction, physical);
+    writeVortexDiagnostics(parameters_, state.time, state.frame, physical);
+    writeState(state, physical);
     finishOutputTransaction(parameters_);
     return energy;
 }

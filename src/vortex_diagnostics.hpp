@@ -1,6 +1,6 @@
 #pragma once
 
-#include "fftw_utils.hpp"
+#include "backend.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -16,5 +16,5 @@ std::vector<DetectedVortex> detectVortices(const Parameters &parameters,
                                            const std::vector<Complex> &physical);
 
 void prepareVortexDiagnostics(const Parameters &parameters, bool restarting);
-void writeVortexDiagnostics(const Parameters &parameters, BaseTransform &transform, double time,
-                            std::uint64_t frame, const SpectralField &wavefunction);
+void writeVortexDiagnostics(const Parameters &parameters, double time, std::uint64_t frame,
+                            const std::vector<Complex> &physical);

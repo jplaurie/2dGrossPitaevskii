@@ -113,31 +113,35 @@ class MpiBackend final : public NonlinearBackend {
                     (*localFields[field])[mode.paddedIndex] =
                         (*globalFields[field])[mode.baseIndex];
         }
-        localNoise_.resize(state_.size());
+        if (parameters_.forcingEnabled && parameters_.forcingProfile != ForcingProfile::singleMode)
+            localNoise_.resize(state_.size());
         workspace_.initialize(state_.size(), parameters_.nonlinearStageCount());
     }
 
     void advanceTimeStep(const SpectralField &noise) override {
-        if (!noise.empty() && noise.size() != parameters_.nx * parameters_.ny)
+        if (!noise.empty() && (noise.size() != parameters_.nx * parameters_.ny ||
+                               localNoise_.size() != state_.size()))
             throw std::runtime_error("invalid MPI stochastic-noise field");
-        std::fill(localNoise_.begin(), localNoise_.end(), Complex{});
-        if (!noise.empty())
+        if (!noise.empty()) {
+            std::fill(localNoise_.begin(), localNoise_.end(), Complex{});
             for (const LocalMode &mode : localModes_)
                 localNoise_[mode.paddedIndex] = noise[mode.baseIndex];
+        }
+        const SpectralField &stepNoise = noise.empty() ? noise : localNoise_;
         const auto rhs = [&](const SpectralField &input, SpectralField &output) {
             evaluateLocal(input, output);
             if (!deterministicForcing_.empty())
                 forEachIndex(output.size(),
                              [&](std::size_t i) { output[i] += deterministicForcing_[i]; });
         };
-        advanceHostTimeStep(
-            parameters_, coefficients_, state_, noise.empty() ? SpectralField{} : localNoise_,
-            workspace_, rhs, [&](SpectralField &localState) {
-                if (parameters_.hypoviscosity > 0.0 && parameters_.hypoviscosityOrder < 0.0)
-                    for (const LocalMode &mode : localModes_)
-                        if (mode.baseIndex == 0)
-                            localState[mode.paddedIndex] = Complex{};
-            });
+        advanceHostTimeStep(parameters_, coefficients_, state_, stepNoise, workspace_, rhs,
+                            [&](SpectralField &localState) {
+                                if (parameters_.hypoviscosity > 0.0 &&
+                                    parameters_.hypoviscosityOrder < 0.0)
+                                    for (const LocalMode &mode : localModes_)
+                                        if (mode.baseIndex == 0)
+                                            localState[mode.paddedIndex] = Complex{};
+                            });
     }
 
     void downloadState(SpectralField &state) override { reduceLocalField(state_, state); }
