@@ -89,6 +89,11 @@ void runChecks(const std::filesystem::path &path) {
 int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "--write") {
         try {
+            // This subprocess deliberately leaves writes failing. HDF5 1.10 can
+            // crash when its atexit handler retries cleanup after the error has
+            // been reported. Keep RAII cleanup, but disable that final retry in
+            // this fault-injection fixture, before any other HDF5 calls.
+            check(H5dont_atexit());
             Parameters parameters;
             parameters.nx = parameters.ny = 8;
             writeHdf5Field(argv[2], parameters, 0., 0, std::vector<Complex>(64, {1., 0.}));

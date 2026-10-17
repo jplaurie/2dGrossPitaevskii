@@ -47,8 +47,10 @@ def main():
                 failed = subprocess.run(
                     [args.writer, "--write", str(root / "failed.h5")],
                     capture_output=True, text=True, preexec_fn=limit_writes)
-                assert failed.returncode == 1, "buffered HDF5 write failure was not reported"
-                assert "cannot flush HDF5" in failed.stderr
+                assert failed.returncode == 1, (
+                    "buffered HDF5 write failure was not reported: "
+                    f"return code {failed.returncode}\n{failed.stderr}")
+                assert "cannot flush HDF5" in failed.stderr, failed.stderr
         initial = root / "initial.dat"
         with initial.open("w") as stream:
             for y in range(6):
