@@ -1,4 +1,5 @@
 #include "solver.hpp"
+#include "indexed_noise.hpp"
 #include "parallel.hpp"
 #include "spectral.hpp"
 #include "vortex_diagnostics.hpp"
@@ -39,15 +40,15 @@ std::uint64_t resolveRandomSeed(std::uint64_t configuredSeed) {
 Solver::Solver(Parameters parameters, std::unique_ptr<NonlinearBackend> backend)
     : parameters_(std::move(parameters)), backend_(std::move(backend)),
       baseTransform_(std::make_unique<BaseTransform>(parameters_)),
-      linearOperator_(makeSpectralField(parameters_)),
-      noise_(makeSpectralField(parameters_,
-                               parameters_.forcingEnabled &&
-                                   parameters_.forcingProfile != ForcingProfile::singleMode)),
-      diagnosticNonlinearTerm_(),
+      linearOperator_(makeSpectralField(parameters_)), noise_(), diagnosticNonlinearTerm_(),
       deterministicForcing_(makeSpectralField(parameters_, parameters_.forcingEnabled &&
                                                                parameters_.forcingProfile ==
                                                                    ForcingProfile::singleMode)),
-      forcingAmplitude_(parameters_.nx * parameters_.ny), stochasticNoiseScale_(noise_.size()),
+      forcingAmplitude_(parameters_.nx * parameters_.ny),
+      stochasticNoiseScale_(parameters_.forcingEnabled &&
+                                    parameters_.forcingProfile != ForcingProfile::singleMode
+                                ? parameters_.nx * parameters_.ny
+                                : 0),
       random_(parameters_.randomSeed = resolveRandomSeed(parameters_.randomSeed)) {
 #ifdef _OPENMP
     if (parameters_.threadCount > 0)
@@ -58,9 +59,17 @@ Solver::Solver(Parameters parameters, std::unique_ptr<NonlinearBackend> backend)
     SpectralField{}.swap(linearOperator_);
     if (parameters_.forcingEnabled) {
         buildForcing();
-        if (backend_->noiseLayout() == NonlinearBackend::NoiseLayout::forcedModes &&
-            parameters_.forcingProfile != ForcingProfile::singleMode)
-            noise_.resize(forcedIndices_.size());
+        if (parameters_.forcingProfile != ForcingProfile::singleMode) {
+            forcedIndices_ = backend_->ownedNoiseIndices(forcedIndices_);
+            std::vector<double> localScales;
+            localScales.reserve(forcedIndices_.size());
+            for (const auto index : forcedIndices_)
+                localScales.push_back(forcingAmplitude_[index] * stochasticNoiseScale_[index]);
+            stochasticNoiseScale_ = std::move(localScales);
+            noise_.resize(backend_->noiseLayout() == NonlinearBackend::NoiseLayout::forcedModes
+                              ? forcedIndices_.size()
+                              : parameters_.nx * parameters_.ny);
+        }
     }
 }
 
@@ -261,7 +270,7 @@ void Solver::buildForcing() {
         throw std::runtime_error(
             "forcing injection coefficients overflow or underflow; adjust the amplitude or "
             "targetWaveActionInjectionRate");
-    if (parameters_.forcingProfile != ForcingProfile::singleMode &&
+    if (backendIsRoot() && parameters_.forcingProfile != ForcingProfile::singleMode &&
         parameters_.nonlinearityCoefficient != 0.0) {
         const long minimumX = -static_cast<long>(parameters_.nx / 2);
         const long maximumX = static_cast<long>((parameters_.nx - 1) / 2);
@@ -290,10 +299,10 @@ void Solver::buildForcing() {
             for (std::size_t x = 0; x < parameters_.nx; ++x) {
                 const long waveX = signedWave(x, parameters_.nx);
                 const long waveY = signedWave(y, parameters_.ny);
-                const long firstX = std::max(minimumX, minimumX - waveX);
-                const long lastX = std::min(maximumX, maximumX - waveX);
-                const long firstY = std::max(minimumY, minimumY - waveY);
-                const long lastY = std::min(maximumY, maximumY - waveY);
+                const long firstX = std::max(minimumX, waveX + minimumX + 1);
+                const long lastX = std::min(maximumX, waveX + maximumX);
+                const long firstY = std::max(minimumY, waveY + minimumY + 1);
+                const long lastY = std::min(maximumY, waveY + maximumY);
                 const std::size_t x0 = static_cast<std::size_t>(firstX - minimumX);
                 const std::size_t x1 = static_cast<std::size_t>(lastX - minimumX + 1);
                 const std::size_t y0 = static_cast<std::size_t>(firstY - minimumY);
@@ -301,8 +310,12 @@ void Solver::buildForcing() {
                 const double acceptedForcingPower =
                     prefix[y1 * stride + x1] - prefix[y0 * stride + x1] - prefix[y1 * stride + x0] +
                     prefix[y0 * stride + x0];
+                // Ito trace for (g/2)||P rho||^2: g*(Q + local forcing power),
+                // where Q=sum f_k^2 and the density projector retains j-i.
                 stochasticQuarticInjectionWeight_[spectralIndex(x, y, parameters_.nx)] =
-                    2.0 * parameters_.nonlinearityCoefficient * acceptedForcingPower;
+                    parameters_.nonlinearityCoefficient *
+                    (waveActionInjectionCoefficient_ +
+                     std::clamp(acceptedForcingPower, 0.0, waveActionInjectionCoefficient_));
             }
         if (!std::all_of(stochasticQuarticInjectionWeight_.begin(),
                          stochasticQuarticInjectionWeight_.end(),
@@ -327,17 +340,17 @@ void Solver::generateNoise(SpectralField &noise) {
     } else {
         std::fill(noise.begin(), noise.end(), Complex{});
     }
-    constexpr double circularScale = 0.7071067811865475244;
-    for (std::size_t position = 0; position < forcedIndices_.size(); ++position) {
+    // Consume exactly one key even on ranks with no forced modes.
+    const std::uint64_t stepKey = random_();
+    forEachIndex(forcedIndices_.size(), [&](std::size_t position) {
         const std::size_t i = forcedIndices_[position];
-        const Complex value = forcingAmplitude_[i] * circularScale * stochasticNoiseScale_[i] *
-                              Complex(normal_(random_), normal_(random_));
+        const Complex value = stochasticNoiseScale_[position] * indexedComplexNormal(stepKey, i);
         noise[compact ? position : i] = value;
-    }
+    });
 }
 
 void Solver::step() {
-    if (!noise_.empty())
+    if (parameters_.forcingEnabled && parameters_.forcingProfile != ForcingProfile::singleMode)
         generateNoise(noise_);
     backend_->advanceTimeStep(noise_);
 }
@@ -363,6 +376,10 @@ void Solver::validateRunBounds(const RestartState &state) const {
         static_cast<long double>(parameters_.timeStep) * parameters_.numberOfSteps;
     if (finalTime > static_cast<long double>(std::numeric_limits<double>::max()))
         throw std::runtime_error("requested run would overflow simulation time");
+    const double roundedFinalTime = static_cast<double>(finalTime);
+    if (!(state.time + parameters_.timeStep > state.time) ||
+        !(roundedFinalTime + parameters_.timeStep > roundedFinalTime))
+        throw std::runtime_error("timeStep is too small to advance the recorded simulation time");
 
     const std::uint64_t scheduledOutputs =
         parameters_.numberOfSteps / parameters_.outputIntervalSteps +
@@ -391,6 +408,7 @@ void Solver::initializeTimeStepping(const SpectralField &wavefunction) {
     backend_->initializeTimeStepping(coefficients_, deterministicForcing_, wavefunction,
                                      forcedIndices_);
     coefficients_ = {};
+    SpectralField{}.swap(deterministicForcing_);
 }
 
 RestartState Solver::prepareRun() {
@@ -419,8 +437,11 @@ RestartState Solver::prepareRun() {
                   << "\nrandom seed = " << parameters_.randomSeed << '\n';
     }
     initializeTimeStepping(state.wavefunction);
-    if (!backendIsRoot())
+    if (!backendIsRoot()) {
         baseTransform_.reset();
+        std::vector<double>{}.swap(forcingAmplitude_);
+        std::vector<double>{}.swap(stochasticQuarticInjectionWeight_);
+    }
     SpectralField{}.swap(state.wavefunction);
     return state;
 }
@@ -472,14 +493,16 @@ double Solver::writeOutputFrame(const RestartState &state, DiagnosticsAverages &
 
 void Solver::run() {
     RestartState state = prepareRun();
+    const long double startTime = state.time;
     DiagnosticsAverages averages;
     const auto start = std::chrono::steady_clock::now();
     for (std::uint64_t stepIndex = 0; stepIndex < parameters_.numberOfSteps; ++stepIndex) {
         const std::uint64_t stepNumber = stepIndex + 1;
         step();
-        state.time += parameters_.timeStep;
         if (stepNumber % parameters_.outputIntervalSteps == 0 ||
             stepNumber == parameters_.numberOfSteps) {
+            state.time = static_cast<double>(startTime + static_cast<long double>(stepNumber) *
+                                                             parameters_.timeStep);
             ++state.frame;
             backend_->downloadState(state.wavefunction);
             backend_->evaluateCurrent(diagnosticNonlinearTerm_);

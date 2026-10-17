@@ -6,78 +6,75 @@
 #include <cmath>
 #include <complex>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
 namespace {
-Complex phase(double angle) { return std::exp(Complex(0.0, angle)); }
+// Exact, non-wrapping Fourier convolutions: independent of FFT padding.
+std::optional<std::size_t> modeIndex(const Parameters &p, long x, long y) {
+    if (!retainedPaddedWave(x, p.nx) || !retainedPaddedWave(y, p.ny))
+        return std::nullopt;
+    return spectralIndex(x < 0 ? p.nx + x : x, y < 0 ? p.ny + y : y, p.nx);
+}
 
-SpectralField directNonlinear(const Parameters &parameters, const SpectralField &w) {
-    const std::size_t paddedCount = parameters.mx() * parameters.my();
-    std::vector<Complex> psi(paddedCount), squareSpectrum(paddedCount), cubic(paddedCount);
-    for (std::size_t py = 0; py < parameters.my(); ++py)
-        for (std::size_t px = 0; px < parameters.mx(); ++px) {
-            Complex sum{};
-            for (std::size_t y = 0; y < parameters.ny; ++y)
-                for (std::size_t x = 0; x < parameters.nx; ++x) {
-                    const double angle =
-                        2.0 * gpPi *
-                        (static_cast<double>(signedWave(x, parameters.nx)) * px / parameters.mx() +
-                         static_cast<double>(signedWave(y, parameters.ny)) * py / parameters.my());
-                    sum += w[spectralIndex(x, y, parameters.nx)] * phase(angle);
-                }
-            psi[spectralIndex(px, py, parameters.mx())] = sum;
+SpectralField directDensity(const Parameters &p, const SpectralField &w) {
+    SpectralField density(w.size());
+    for (std::size_t d = 0; d < w.size(); ++d) {
+        const long dx = signedWave(d % p.nx, p.nx), dy = signedWave(d / p.nx, p.ny);
+        if (!retainedDensityWave(dx, p.nx) || !retainedDensityWave(dy, p.ny))
+            continue;
+        for (std::size_t j = 0; j < w.size(); ++j) {
+            const auto other =
+                modeIndex(p, signedWave(j % p.nx, p.nx) + dx, signedWave(j / p.nx, p.ny) + dy);
+            if (other)
+                density[d] += w[*other] * std::conj(w[j]);
         }
-    for (std::size_t ky = 0; ky < parameters.my(); ++ky)
-        for (std::size_t kx = 0; kx < parameters.mx(); ++kx) {
-            Complex sum{};
-            for (std::size_t py = 0; py < parameters.my(); ++py)
-                for (std::size_t px = 0; px < parameters.mx(); ++px) {
-                    const double angle = -2.0 * gpPi *
-                                         (static_cast<double>(signedWave(kx, parameters.mx())) *
-                                              px / parameters.mx() +
-                                          static_cast<double>(signedWave(ky, parameters.my())) *
-                                              py / parameters.my());
-                    const Complex value = psi[spectralIndex(px, py, parameters.mx())];
-                    sum += value * value * phase(angle);
-                }
-            if (retainedPaddedWave(signedWave(kx, parameters.mx()), parameters.nx) &&
-                retainedPaddedWave(signedWave(ky, parameters.my()), parameters.ny))
-                squareSpectrum[spectralIndex(kx, ky, parameters.mx())] =
-                    sum / static_cast<double>(paddedCount);
-        }
-    for (std::size_t py = 0; py < parameters.my(); ++py)
-        for (std::size_t px = 0; px < parameters.mx(); ++px) {
-            Complex sum{};
-            for (std::size_t ky = 0; ky < parameters.my(); ++ky)
-                for (std::size_t kx = 0; kx < parameters.mx(); ++kx) {
-                    const double angle = 2.0 * gpPi *
-                                         (static_cast<double>(signedWave(kx, parameters.mx())) *
-                                              px / parameters.mx() +
-                                          static_cast<double>(signedWave(ky, parameters.my())) *
-                                              py / parameters.my());
-                    sum += squareSpectrum[spectralIndex(kx, ky, parameters.mx())] * phase(angle);
-                }
-            const std::size_t i = spectralIndex(px, py, parameters.mx());
-            cubic[i] = sum * std::conj(psi[i]);
-        }
-    SpectralField result(parameters.nx * parameters.ny);
-    for (std::size_t y = 0; y < parameters.ny; ++y)
-        for (std::size_t x = 0; x < parameters.nx; ++x) {
-            Complex sum{};
-            for (std::size_t py = 0; py < parameters.my(); ++py)
-                for (std::size_t px = 0; px < parameters.mx(); ++px) {
-                    const double angle =
-                        -2.0 * gpPi *
-                        (static_cast<double>(signedWave(x, parameters.nx)) * px / parameters.mx() +
-                         static_cast<double>(signedWave(y, parameters.ny)) * py / parameters.my());
-                    sum += cubic[spectralIndex(px, py, parameters.mx())] * phase(angle);
-                }
-            result[spectralIndex(x, y, parameters.nx)] = parameters.nonlinearityCoefficient * sum /
-                                                         static_cast<double>(paddedCount) /
-                                                         Complex(0.0, 1.0);
+    }
+    return density;
+}
+
+SpectralField directNonlinear(const Parameters &p, const SpectralField &w) {
+    const auto density = directDensity(p, w);
+    SpectralField result(w.size());
+    for (std::size_t k = 0; k < w.size(); ++k)
+        for (std::size_t d = 0; d < w.size(); ++d) {
+            const auto other = modeIndex(p, signedWave(k % p.nx, p.nx) - signedWave(d % p.nx, p.nx),
+                                         signedWave(k / p.nx, p.ny) - signedWave(d / p.nx, p.ny));
+            if (other)
+                result[k] += p.nonlinearityCoefficient * density[d] * w[*other] / Complex(0., 1.);
         }
     return result;
+}
+
+void checkMomentumAndPlaneWaves(const Parameters &p, NonlinearBackend &backend) {
+    SpectralField w(p.nx * p.ny), rate;
+    for (std::size_t i = 0; i < w.size(); ++i)
+        w[i] = {0.12 * std::cos(0.71 * i), 0.09 * std::sin(0.39 * i)};
+    backend.evaluate(w, rate);
+    const auto exact = directNonlinear(p, w);
+    double massRate = 0., momentumXRate = 0., momentumYRate = 0.;
+    for (std::size_t i = 0; i < w.size(); ++i) {
+        if (std::abs(rate[i] - exact[i]) > 1.e-12)
+            throw std::runtime_error("density convolution disagrees at a spectral boundary");
+        const double transfer = 2. * std::real(std::conj(w[i]) * rate[i]);
+        massRate += transfer;
+        momentumXRate += signedWave(i % p.nx, p.nx) * transfer;
+        momentumYRate += signedWave(i / p.nx, p.ny) * transfer;
+    }
+    if (std::max({std::abs(massRate), std::abs(momentumXRate), std::abs(momentumYRate)}) > 1.e-12)
+        throw std::runtime_error("density-projected nonlinearity does not conserve mass/momentum");
+    for (std::size_t mode = 0; mode < w.size(); ++mode) {
+        std::fill(w.begin(), w.end(), Complex{});
+        w[mode] = {0.7, 0.2};
+        backend.evaluate(w, rate);
+        for (std::size_t i = 0; i < w.size(); ++i) {
+            const Complex expected =
+                p.nonlinearityCoefficient * std::norm(w[mode]) * w[i] / Complex(0., 1.);
+            if (std::abs(rate[i] - expected) > 1.e-12)
+                throw std::runtime_error("plane-wave nonlinear phase is incorrect");
+        }
+    }
 }
 } // namespace
 
@@ -101,6 +98,13 @@ int main(int argc, char **argv) {
         w[spectralIndex(1, 1, parameters.nx)] = {0.03, -0.07};
         w[spectralIndex(3, 2, parameters.nx)] = {0.02, 0.01};
         auto backend = makeBackend(parameters);
+        checkMomentumAndPlaneWaves(parameters, *backend);
+        {
+            Parameters edgeParameters = parameters;
+            edgeParameters.nx = edgeParameters.ny = 8;
+            auto edgeBackend = makeBackend(edgeParameters);
+            checkMomentumAndPlaneWaves(edgeParameters, *edgeBackend);
+        }
         SpectralField actual;
         backend->evaluate(w, actual);
         const SpectralField expected = directNonlinear(parameters, w);
@@ -110,8 +114,9 @@ int main(int argc, char **argv) {
             magnitude = std::max(magnitude, std::abs(expected[i]));
         }
         if (error > 2.e-11 * std::max(1.0, magnitude))
-            throw std::runtime_error("dealiased cubic term disagrees with direct DFT: " +
-                                     std::to_string(error));
+            throw std::runtime_error(
+                "dealiased cubic term disagrees with exact Fourier convolution: " +
+                std::to_string(error));
 
         BaseTransform transform(parameters);
         SpectralField conservativeRate(w.size()), dampingRate(w.size()), zeroRate(w.size());
@@ -124,10 +129,10 @@ int main(int argc, char **argv) {
                 conservativeRate[i] = Complex(0.0, -weight) * w[i] + actual[i];
                 dampingRate[i] = -(0.2 + 0.01 * k2) * w[i];
             }
-        SpectralField square, conservativeSquareRate;
-        transform.projectedSquareSpectra(w, conservativeRate, square, conservativeSquareRate);
-        SpectralField dampingSquareRate;
-        transform.projectedSquareSpectra(w, dampingRate, square, dampingSquareRate);
+        SpectralField density, conservativeDensityRate;
+        transform.projectedDensitySpectra(w, conservativeRate, density, conservativeDensityRate);
+        SpectralField dampingDensityRate;
+        transform.projectedDensitySpectra(w, dampingRate, density, dampingDensityRate);
         const double area = parameters.lx() * parameters.ly();
         const auto quadraticRate = [&](const SpectralField &rate) {
             double value = 0.0;
@@ -143,20 +148,20 @@ int main(int argc, char **argv) {
         };
         const auto quarticRate = [&](const SpectralField &rate) {
             double value = 0.0;
-            for (std::size_t i = 0; i < square.size(); ++i)
+            for (std::size_t i = 0; i < density.size(); ++i)
                 value += area * parameters.nonlinearityCoefficient *
-                         std::real(std::conj(square[i]) * rate[i]);
+                         std::real(std::conj(density[i]) * rate[i]);
             return value;
         };
         const double conservativeEnergyRate =
-            quadraticRate(conservativeRate) + quarticRate(conservativeSquareRate);
+            quadraticRate(conservativeRate) + quarticRate(conservativeDensityRate);
         if (std::abs(conservativeEnergyRate) > 2.e-11)
             throw std::runtime_error("projected Hamiltonian transfer does not close: " +
                                      std::to_string(conservativeEnergyRate));
 
         const auto projectedEnergy = [&](const SpectralField &state) {
-            SpectralField stateSquare, unused;
-            transform.projectedSquareSpectra(state, zeroRate, stateSquare, unused);
+            SpectralField stateDensity, unused;
+            transform.projectedDensitySpectra(state, zeroRate, stateDensity, unused);
             double value = 0.0;
             for (std::size_t y = 0; y < parameters.ny; ++y)
                 for (std::size_t x = 0; x < parameters.nx; ++x) {
@@ -166,8 +171,8 @@ int main(int argc, char **argv) {
                         parameters.chemicalPotential;
                     value += area * weight * std::norm(state[i]);
                 }
-            for (const Complex squareMode : stateSquare)
-                value += 0.5 * area * parameters.nonlinearityCoefficient * std::norm(squareMode);
+            for (const Complex densityMode : stateDensity)
+                value += 0.5 * area * parameters.nonlinearityCoefficient * std::norm(densityMode);
             return value;
         };
         constexpr double epsilon = 1.e-7;
@@ -178,14 +183,51 @@ int main(int argc, char **argv) {
         }
         const double finiteDifferenceLoss =
             -(projectedEnergy(plus) - projectedEnergy(minus)) / (2.0 * epsilon);
-        const double analyticLoss = -quadraticRate(dampingRate) - quarticRate(dampingSquareRate);
+        const double analyticLoss = -quadraticRate(dampingRate) - quarticRate(dampingDensityRate);
         if (std::abs(finiteDifferenceLoss - analyticLoss) >
             2.e-8 * std::max(1.0, std::abs(analyticLoss)))
             throw std::runtime_error("projected-Hamiltonian damping rate is inconsistent: " +
                                      std::to_string(finiteDifferenceLoss - analyticLoss));
+
+        // Independently differentiate the Hamiltonian along both real noise
+        // directions. Circular complex noise has variance f_j^2/2 per direction.
+        constexpr double noiseEpsilon = 1.e-3;
+        const double energy = projectedEnergy(w);
+        double trace = 0., predictedTrace = 0.;
+        for (std::size_t j = 0; j < w.size(); ++j) {
+            const double power = .01 * (1. + .1 * j);
+            double laplacian = 0.;
+            for (const Complex direction : {Complex(1., 0.), Complex(0., 1.)}) {
+                auto upper = w, lower = w;
+                upper[j] += noiseEpsilon * direction;
+                lower[j] -= noiseEpsilon * direction;
+                laplacian += (projectedEnergy(upper) - 2. * energy + projectedEnergy(lower)) /
+                             (noiseEpsilon * noiseEpsilon);
+            }
+            trace += .25 * power * laplacian;
+            const double weight =
+                -parameters.dispersionCoefficient *
+                    waveNumberSquared(parameters, j % parameters.nx, j / parameters.nx) +
+                parameters.chemicalPotential;
+            predictedTrace += area * power * weight;
+            for (std::size_t i = 0; i < w.size(); ++i) {
+                const long dx = signedWave(j % parameters.nx, parameters.nx) -
+                                signedWave(i % parameters.nx, parameters.nx);
+                const long dy = signedWave(j / parameters.nx, parameters.ny) -
+                                signedWave(i / parameters.nx, parameters.ny);
+                const double accepted =
+                    retainedDensityWave(dx, parameters.nx) && retainedDensityWave(dy, parameters.ny)
+                        ? 1.
+                        : 0.;
+                predictedTrace += area * parameters.nonlinearityCoefficient * power *
+                                  (1. + accepted) * std::norm(w[i]);
+            }
+        }
+        if (std::abs(trace - predictedTrace) > 2.e-6 * std::max(1., std::abs(predictedTrace)))
+            throw std::runtime_error("density Hamiltonian Ito trace is inconsistent");
         backend.reset();
         backendFinalize();
-        std::cout << "dealiased cubic term and projected Hamiltonian agree\n";
+        std::cout << "density convolution, plane waves, momentum, and Hamiltonian agree\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

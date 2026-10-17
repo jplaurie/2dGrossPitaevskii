@@ -1,4 +1,5 @@
 #include "host_stepper.hpp"
+#include "indexed_noise.hpp"
 #include "output.hpp"
 
 #include <chrono>
@@ -9,6 +10,24 @@
 #include <string>
 
 namespace {
+void checkIndexedNoise() {
+    constexpr std::size_t count = 200000;
+    Complex mean{};
+    double real2 = 0., imaginary2 = 0., cross = 0.;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto value = indexedComplexNormal(7654, i);
+        if (!std::isfinite(value.real()) || !std::isfinite(value.imag()))
+            throw std::runtime_error("indexed Gaussian sample is non-finite");
+        mean += value;
+        real2 += value.real() * value.real();
+        imaginary2 += value.imag() * value.imag();
+        cross += value.real() * value.imag();
+    }
+    if (std::abs(mean / static_cast<double>(count)) > .008 || std::abs(real2 / count - .5) > .008 ||
+        std::abs(imaginary2 / count - .5) > .008 || std::abs(cross / count) > .008)
+        throw std::runtime_error("indexed Gaussian moments are inconsistent with circular noise");
+}
+
 class TemporaryDirectory {
   public:
     TemporaryDirectory() {
@@ -83,6 +102,7 @@ int main() {
     try {
         TemporaryDirectory temporary;
         checkWorkspaceReinitialization();
+        checkIndexedNoise();
         checkTransactionOrdering(temporary.path());
         std::cout << "runtime guard tests passed\n";
         return 0;

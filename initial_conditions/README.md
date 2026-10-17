@@ -231,6 +231,10 @@ dipole, start with its point-vortex velocity and adjust the relevant component
 to minimize the final residual. Finite cores and periodic images mean that the
 best GP drift can differ from the elementary `1/d` estimate.
 
+At finite spectral resolution, relaxation uses the same density-projected
+nonlinearity `P_psi[P_rho[|psi|^2] psi]` and matching quartic energy as the
+real-time solver. The intermediate density excludes both Nyquist planes.
+
 The orientation and signs matter. In the quick-start state, `+` is left of `-`,
 so the motion and `--drift-y` are positive. Reversing the circulation signs
 reverses the drift; rotating that pair by 90 degrees moves the drift into the

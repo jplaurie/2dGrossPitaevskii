@@ -3,6 +3,7 @@
 
 import argparse
 import math
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -30,9 +31,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", required=True)
     parser.add_argument("--exporter", required=True)
+    parser.add_argument("--writer")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="gp2d-hdf5-") as temporary:
         root = Path(temporary)
+        if args.writer:
+            try:
+                import resource
+            except ImportError:
+                resource = None
+            if resource is not None:
+                def limit_writes():
+                    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (512, 512))
+                failed = subprocess.run(
+                    [args.writer, "--write", str(root / "failed.h5")],
+                    capture_output=True, text=True, preexec_fn=limit_writes)
+                assert failed.returncode == 1, "buffered HDF5 write failure was not reported"
+                assert "cannot flush HDF5" in failed.stderr
         initial = root / "initial.dat"
         with initial.open("w") as stream:
             for y in range(6):

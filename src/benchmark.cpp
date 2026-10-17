@@ -63,6 +63,7 @@ int main(int argc, char **argv) {
                       << parameters.nx << ',' << parameters.ny << ',' << measuredSteps << ','
                       << elapsed << ',' << elapsed / static_cast<double>(measuredSteps) << '\n';
         }
+        backendReady = false;
         backendFinalize();
         return 0;
     } catch (const std::exception &error) {
@@ -70,7 +71,7 @@ int main(int argc, char **argv) {
             std::cerr << "error: " << error.what() << '\n';
         if (backendReady) {
             backendAbort(1);
-            backendFinalize();
+            backendFinalize(false);
         }
         return 1;
     }

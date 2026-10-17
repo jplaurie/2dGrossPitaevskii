@@ -20,6 +20,7 @@ int main(int argc, char **argv) {
             Solver solver(std::move(parameters), std::move(backend));
             solver.run();
         }
+        backendReady = false;
         backendFinalize();
         return 0;
     } catch (const std::exception &error) {
@@ -27,7 +28,7 @@ int main(int argc, char **argv) {
             std::cerr << "error: " << error.what() << '\n';
         if (backendReady) {
             backendAbort(1);
-            backendFinalize();
+            backendFinalize(false);
         }
         return 1;
     }

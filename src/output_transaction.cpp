@@ -200,7 +200,8 @@ void writeRunRecords(const Parameters &parameters, const std::string &backend, d
                       quadraticEnergyCoefficient);
     std::ofstream manifest(segment / "segment.txt");
     manifest << std::setprecision(17) << "startTime " << time << "\nstartFrame " << frame
-             << "\nstochasticUpdate exact_linear_covariance_v1\n";
+             << "\nnonlinearModel projected_density_v1\n"
+             << "stochasticUpdate exact_linear_covariance_indexed_modes_v2\n";
     closeChecked(manifest, "cannot write run segment record");
     for (const char *name :
          {"resolved_parameters.txt", "forcing_summary.csv", "forcing_spectrum.csv"}) {

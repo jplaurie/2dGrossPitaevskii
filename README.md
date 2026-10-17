@@ -29,7 +29,8 @@ tests.
 
 The solver evolves a complex field $\psi(\boldsymbol{x},t)$ on the doubly
 periodic domain $L_x=2\pi A_r$, $L_y=2\pi$, where $A_r$ is
-`aspectRatio`. Its complete Fourier-space equation is
+`aspectRatio`. Before the spectral truncation described below, its
+Fourier-space equation is
 
 ```math
 \partial_t\widehat{\psi}_{\boldsymbol{k}}
@@ -144,15 +145,34 @@ $m=\texttt{forcingWavenumber}$.
 | $\alpha,q,k_\alpha$ | `hypoviscosity`, `hypoviscosityOrder`, `hypoviscosityCutoff` | Large-scale damping |
 
 The cubic term uses a two-pass 3/2-rule treatment:
-`psi` is embedded on the padded grid, `psi^2` is transformed and truncated to
-the retained band, and that filtered product is multiplied by `conj(psi)`
-before the final transform. This is important for a cubic nonlinearity and
-provides a momentum-conserving discretization.
+`psi` is embedded on the padded grid, `rho = |psi|^2` is transformed and
+filtered, and that filtered density is multiplied by `psi` before the final
+transform. Thus the discrete nonlinearity is `P_psi[P_rho[|psi|^2] psi]`.
+The density projector retains `|kx_index| < nx/2` and `|ky_index| < ny/2`;
+both Nyquist planes are excluded so the filtered density remains real.
+The wavefunction retains its full, half-open Fourier band. Each quadratic
+product is dealiased. The conservative spatial discretization preserves wave
+action, momentum, and the Hamiltonian with quartic term
+`(g/2) * integral |P_rho[|psi|^2]|^2`; time integration introduces numerical
+conservation error. This is the density-projected truncated GP formulation,
+which differs at finite resolution from projecting the full cubic only once.
+See [Krstulovic and Brachet, Eq. 18](https://doi.org/10.1103/PhysRevE.83.066311)
+for the density-projected formulation and its conservation properties.
 
 Fixed-step integrators are ETDRK2 (`etd2`), ETDRK3 (`etd3`), ETDRK4-B
 (`etd4`), and second-order integrating-factor Runge–Kutta (`rk2`). The full
 linear operator is integrated analytically. Stochastic forcing uses the exact
 linear covariance over one step, and its generator state is checkpointed.
+Each step draws one shared generator key; Gaussian increments are indexed by
+that key and the global Fourier mode, so MPI ranks generate only local modes
+while preserving the same noise across backends and rank counts.
+
+The current working tree uses `projected_density_v1` and
+`exact_linear_covariance_indexed_modes_v2`, recorded in resolved parameters and
+run segments. These change the nonlinear model and seeded trajectories relative
+to v0.5.0's filtered `psi^2` and sequential Gaussian sampling. Existing
+checkpoints can resume, but continue with the current model and noise algorithm.
+Use new run directories when comparing the two implementations.
 
 ## Requirements
 
@@ -401,8 +421,8 @@ Here `quadratic_energy` means the kinetic-plus-chemical-potential part,
 and potential components in separate columns; total energy additionally
 includes the quartic nonlinear contribution. For consistency with the
 two-pass de-aliased cubic term, quartic energy is evaluated from the retained
-spectrum of `psi^2`. The energy flux includes both the quadratic and quartic
-transfers and uses the legacy low-wavenumber cumulative convention. The
+spectrum of the filtered density `|psi|^2`. The energy flux includes both the
+quadratic and quartic transfers and uses the legacy low-wavenumber cumulative convention. The
 `total_energy_dissipation_hypo` and
 `total_energy_dissipation_hyper` columns include each operator's effect on
 both the quadratic and quartic Hamiltonian energy; the similarly named

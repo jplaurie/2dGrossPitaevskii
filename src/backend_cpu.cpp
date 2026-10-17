@@ -5,6 +5,7 @@
 #include "spectral.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <stdexcept>
 
 #ifdef _OPENMP
@@ -18,18 +19,18 @@ bool fftwThreadsInitialized = false;
 
 class CpuBackend final : public NonlinearBackend {
   public:
-    explicit CpuBackend(const Parameters &parameters)
-        : parameters_(parameters), paddedSpectrum_(parameters.mx() * parameters.my()),
-          psi_(parameters.mx() * parameters.my()),
-          squareSpectrum_(parameters.mx() * parameters.my()),
-          projectedSquare_(parameters.mx() * parameters.my()),
-          paddedIndexByBaseMode_(parameters.nx * parameters.ny),
-          nonlinearMultiplier_(parameters.nx * parameters.ny) {
+    explicit CpuBackend(const Parameters &parameters) : parameters_(parameters) {
+        if (parameters.nonlinearityCoefficient == 0.0)
+            return;
+        for (auto *buffer : {&paddedSpectrum_, &psi_, &densitySpectrum_, &projectedDensity_})
+            buffer->resize(parameters.mx() * parameters.my());
+        paddedIndexByBaseMode_.resize(parameters.nx * parameters.ny);
+        nonlinearMultiplier_.resize(parameters.nx * parameters.ny);
         inversePsi_ = makePlan(paddedSpectrum_, psi_, FFTW_BACKWARD);
-        forwardSquare_ = makePlan(projectedSquare_, squareSpectrum_, FFTW_FORWARD);
-        inverseSquare_ = makePlan(squareSpectrum_, projectedSquare_, FFTW_BACKWARD);
-        forwardNonlinear_ = makePlan(paddedSpectrum_, squareSpectrum_, FFTW_FORWARD);
-        if (!inversePsi_ || !forwardSquare_ || !inverseSquare_ || !forwardNonlinear_)
+        forwardDensity_ = makePlan(projectedDensity_, densitySpectrum_, FFTW_FORWARD);
+        inverseDensity_ = makePlan(densitySpectrum_, projectedDensity_, FFTW_BACKWARD);
+        forwardNonlinear_ = makePlan(paddedSpectrum_, densitySpectrum_, FFTW_FORWARD);
+        if (!inversePsi_ || !forwardDensity_ || !inverseDensity_ || !forwardNonlinear_)
             throw std::runtime_error("FFTW could not create dealiased plans");
         const double scale = 1.0 / static_cast<double>(parameters.mx() * parameters.my());
         for (std::size_t i = 0; i < paddedIndexByBaseMode_.size(); ++i) {
@@ -54,15 +55,15 @@ class CpuBackend final : public NonlinearBackend {
         });
         fftw_execute(inversePsi_);
         const std::size_t paddedCount = parameters_.mx() * parameters_.my();
-        squarePointwise(psi_, projectedSquare_, paddedCount);
-        fftw_execute(forwardSquare_);
-        filterPaddedSpectrum(squareSpectrum_, parameters_, 0, parameters_.my());
-        fftw_execute(inverseSquare_);
-        multiplyConjugatePointwise(projectedSquare_, psi_, paddedSpectrum_, paddedCount);
+        densityPointwise(psi_, projectedDensity_, paddedCount);
+        fftw_execute(forwardDensity_);
+        filterDensitySpectrum(densitySpectrum_, parameters_, 0, parameters_.my());
+        fftw_execute(inverseDensity_);
+        multiplyPointwise(projectedDensity_, psi_, paddedSpectrum_, paddedCount);
         fftw_execute(forwardNonlinear_);
         result.resize(parameters_.nx * parameters_.ny);
         forEachIndex(paddedIndexByBaseMode_.size(), [&](std::size_t i) {
-            result[i] = nonlinearMultiplier_[i] * squareSpectrum_[paddedIndexByBaseMode_[i]];
+            result[i] = nonlinearMultiplier_[i] * densitySpectrum_[paddedIndexByBaseMode_[i]];
         });
     }
 
@@ -104,25 +105,33 @@ class CpuBackend final : public NonlinearBackend {
     }
 
     Parameters parameters_;
-    FftwComplexField paddedSpectrum_, psi_, squareSpectrum_, projectedSquare_;
+    FftwComplexField paddedSpectrum_, psi_, densitySpectrum_, projectedDensity_;
     std::vector<std::size_t> paddedIndexByBaseMode_;
     SpectralField nonlinearMultiplier_;
     IntegrationCoefficients coefficients_;
     SpectralField state_, deterministicForcing_;
     HostIntegrationWorkspace workspace_;
-    FftwPlan inversePsi_, forwardSquare_, inverseSquare_, forwardNonlinear_;
+    FftwPlan inversePsi_, forwardDensity_, inverseDensity_, forwardNonlinear_;
 };
 } // namespace
 
 void backendInitialize(int &, char **&) {}
-void backendFinalize() {
-    saveFftwWisdom();
+void backendFinalize(bool writeWisdom) {
+    std::exception_ptr error;
+    try {
+        if (writeWisdom)
+            saveFftwWisdom();
+    } catch (...) {
+        error = std::current_exception();
+    }
 #ifdef GP2D_HAVE_FFTW_THREADS
     if (fftwThreadsInitialized) {
         fftw_cleanup_threads();
         fftwThreadsInitialized = false;
     }
 #endif
+    if (error)
+        std::rethrow_exception(error);
 }
 void backendAbort(int) {}
 void backendBarrier() {}

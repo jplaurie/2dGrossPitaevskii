@@ -19,6 +19,11 @@ class NonlinearBackend {
     virtual ~NonlinearBackend() = default;
     virtual void evaluate(const SpectralField &wavefunction, SpectralField &result) = 0;
     [[nodiscard]] virtual NoiseLayout noiseLayout() const = 0;
+    // Global mode identities are preserved so indexed noise is rank independent.
+    [[nodiscard]] virtual std::vector<std::size_t>
+    ownedNoiseIndices(const std::vector<std::size_t> &indices) const {
+        return indices;
+    }
     virtual void initializeTimeStepping(const IntegrationCoefficients &coefficients,
                                         const SpectralField &deterministicForcing,
                                         const SpectralField &state,
@@ -31,7 +36,7 @@ class NonlinearBackend {
 };
 
 void backendInitialize(int &argc, char **&argv);
-void backendFinalize();
+void backendFinalize(bool writeWisdom = true);
 void backendAbort(int exitCode);
 void backendBarrier();
 [[nodiscard]] bool backendIsRoot();

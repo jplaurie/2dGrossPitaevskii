@@ -180,18 +180,17 @@ def cpu_checks(root, cpu):
             forcing[wave_x, wave_y] = amplitude
             quadratic_injection += (k2 + .1) * amplitude ** 2
     quartic_injection = 0.0
-    for qy in range(minimum_y, maximum_y + 1):
-        for qx in range(minimum_x, maximum_x + 1):
+    total_power = sum(amplitude ** 2 for amplitude in forcing.values())
+    for iy in range(minimum_y, maximum_y + 1):
+        for ix in range(minimum_x, maximum_x + 1):
+            accepted_power = 0.0
             for (jx, jy), amplitude in forcing.items():
-                ix, iy = qx - jx, qy - jy
-                if (minimum_x <= ix <= maximum_x and
-                        minimum_y <= iy <= maximum_y):
-                    x = ix if ix >= 0 else nx + ix
-                    y = iy if iy >= 0 else ny + iy
-                    quartic_injection += amplitude ** 2 * abs(
-                        mode(values, nx, x, y)) ** 2
+                if abs(jx - ix) < nx / 2 and abs(jy - iy) < ny / 2:
+                    accepted_power += amplitude ** 2
+            quartic_injection += (total_power + accepted_power) * abs(
+                mode(values, nx, ix % nx, iy % ny)) ** 2
     area = 1.5 * (2 * math.pi) ** 2
-    expected_injection = area * (quadratic_injection + 4 * quartic_injection)
+    expected_injection = area * (quadratic_injection + 2 * quartic_injection)
     assert math.isclose(float(rows[0]["expected_full_energy_injection"]),
                         expected_injection, rel_tol=2e-11)
     for quantity in ("total_energy_dissipation_hypo",
@@ -284,6 +283,27 @@ def cpu_checks(root, cpu):
     assert wisdom_file.exists() and wisdom_file.stat().st_size > 0
     run(cpu, wisdom_params)
 
+    failed_wisdom = write_params(
+        root / "failed_wisdom", numberOfSteps=1, outputIntervalSteps=1,
+        forcingEnabled="false", fftwWisdomFile=root / "absent/wisdom")
+    result = subprocess.run([*cpu, str(failed_wisdom)], capture_output=True, text=True)
+    assert result.returncode == 1 and "cannot export FFTW wisdom" in result.stderr
+    assert "terminate called" not in result.stderr
+
+    # Reject a restarted timestep that cannot change the saved double timestamp.
+    stagnant = root / "stagnant_time"
+    stagnant_params = write_params(stagnant, numberOfSteps=1, outputIntervalSteps=1,
+                                   forcingEnabled="false")
+    run(cpu, stagnant_params)
+    metadata = stagnant / "data/restart_state.txt"
+    lines = metadata.read_text().splitlines()
+    lines[1] = "time 10000000000000000"
+    metadata.write_text("\n".join(lines) + "\n")
+    before = metadata.read_bytes()
+    run_error(cpu, stagnant_params, "timeStep is too small")
+    assert metadata.read_bytes() == before
+    assert not (stagnant / "data/checkpoint_00000002.bin").exists()
+
     # Frame collisions are detected before any diagnostic append is committed.
     collision = root / "collision"
     collision_params = write_params(collision, numberOfSteps=2)
@@ -318,7 +338,19 @@ def cpu_checks(root, cpu):
 def backend_checks(root, cpu, candidate, tolerance):
     initial = root / "initial.dat"
     initial_field(initial, 12, 14)
+    boundary_initial = root / "boundary_initial.dat"
+    with boundary_initial.open("w") as stream:
+        for y in range(14):
+            row = []
+            for x in range(12):
+                value = sum((complex(.02 * math.cos(.71 * i), .015 * math.sin(.39 * i))
+                             * cmath.exp(2j * math.pi * (signed_wave(i % 12, 12) * x / 12
+                                                        + signed_wave(i // 12, 14) * y / 14)))
+                            for i in range(12 * 14))
+                row.extend((f"{value.real:.17g}", f"{value.imag:.17g}"))
+            stream.write(" ".join(row) + "\n")
     cases = [
+        ("spectral_boundaries", dict(forcingEnabled="false", initialConditionFile=boundary_initial)),
         ("etd2_gaussian", dict(integrator="etd2", forcingProfile="gaussian",
                                forcingWidth=.8)),
         ("etd3_gaussian", dict(integrator="etd3", forcingProfile="gaussian",

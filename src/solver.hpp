@@ -43,5 +43,6 @@ class Solver {
     double waveActionInjectionCoefficient_ = 0.0;
     double quadraticEnergyInjectionCoefficient_ = 0.0;
     std::mt19937_64 random_;
+    // Retained in checkpoint metadata for compatibility with older readers.
     std::normal_distribution<double> normal_{0.0, 1.0};
 };

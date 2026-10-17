@@ -401,6 +401,8 @@ void writeParameterRecord(const Parameters &parameters, const std::string &backe
     write("solverVersion", GP2D_VERSION);
     write("gitCommit", GP2D_GIT_COMMIT);
     write("gitDirty", GP2D_GIT_DIRTY);
+    write("nonlinearModel", "projected_density_v1");
+    write("stochasticUpdate", "exact_linear_covariance_indexed_modes_v2");
     write("nx", parameters.nx);
     write("ny", parameters.ny);
     write("aspectRatio", parameters.aspectRatio);

@@ -86,7 +86,18 @@ void runChecks(const std::filesystem::path &path) {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc == 3 && std::string(argv[1]) == "--write") {
+        try {
+            Parameters parameters;
+            parameters.nx = parameters.ny = 8;
+            writeHdf5Field(argv[2], parameters, 0., 0, std::vector<Complex>(64, {1., 0.}));
+            return 0;
+        } catch (const std::exception &error) {
+            std::cerr << error.what() << '\n';
+            return 1;
+        }
+    }
     const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto path = std::filesystem::temp_directory_path() /
                       ("gp2d_hdf5_validation_" + std::to_string(suffix) + ".h5");

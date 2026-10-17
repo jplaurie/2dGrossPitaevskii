@@ -46,15 +46,17 @@ class MpiBackend final : public NonlinearBackend {
                                              MPI_COMM_WORLD, &localRows_, &firstRow_);
         if (allocLocal_ < localRows_ * static_cast<ptrdiff_t>(parameters.mx()))
             throw std::runtime_error("FFTW-MPI returned an invalid local size");
-        for (FftwComplexField *buffer :
-             {&paddedSpectrum_, &psi_, &squareSpectrum_, &projectedSquare_})
-            buffer->resize(static_cast<std::size_t>(allocLocal_));
-        inversePsi_ = makePlan(paddedSpectrum_, psi_, FFTW_BACKWARD);
-        forwardSquare_ = makePlan(projectedSquare_, squareSpectrum_, FFTW_FORWARD);
-        inverseSquare_ = makePlan(squareSpectrum_, projectedSquare_, FFTW_BACKWARD);
-        forwardNonlinear_ = makePlan(paddedSpectrum_, squareSpectrum_, FFTW_FORWARD);
-        if (!inversePsi_ || !forwardSquare_ || !inverseSquare_ || !forwardNonlinear_)
-            throw std::runtime_error("FFTW-MPI could not create dealiased plans");
+        if (parameters.nonlinearityCoefficient != 0.0) {
+            for (FftwComplexField *buffer :
+                 {&paddedSpectrum_, &psi_, &densitySpectrum_, &projectedDensity_})
+                buffer->resize(static_cast<std::size_t>(allocLocal_));
+            inversePsi_ = makePlan(paddedSpectrum_, psi_, FFTW_BACKWARD);
+            forwardDensity_ = makePlan(projectedDensity_, densitySpectrum_, FFTW_FORWARD);
+            inverseDensity_ = makePlan(densitySpectrum_, projectedDensity_, FFTW_BACKWARD);
+            forwardNonlinear_ = makePlan(paddedSpectrum_, densitySpectrum_, FFTW_FORWARD);
+            if (!inversePsi_ || !forwardDensity_ || !inverseDensity_ || !forwardNonlinear_)
+                throw std::runtime_error("FFTW-MPI could not create dealiased plans");
+        }
         const double scale = 1.0 / static_cast<double>(parameters.mx() * parameters.my());
         for (std::size_t i = 0; i < baseCount; ++i) {
             const std::size_t padded = paddedIndexForBaseMode(parameters, i);
@@ -90,12 +92,24 @@ class MpiBackend final : public NonlinearBackend {
                  "MPI_Allreduce standalone nonlinear result");
     }
 
-    NoiseLayout noiseLayout() const override { return NoiseLayout::fullField; }
+    NoiseLayout noiseLayout() const override { return NoiseLayout::forcedModes; }
+
+    std::vector<std::size_t>
+    ownedNoiseIndices(const std::vector<std::size_t> &indices) const override {
+        std::vector<std::size_t> owned;
+        for (const auto index : indices) {
+            const auto row = static_cast<ptrdiff_t>(paddedIndexForBaseMode(parameters_, index) /
+                                                    parameters_.mx());
+            if (row >= firstRow_ && row < firstRow_ + localRows_)
+                owned.push_back(index);
+        }
+        return owned;
+    }
 
     void initializeTimeStepping(const IntegrationCoefficients &coefficients,
                                 const SpectralField &deterministicForcing,
                                 const SpectralField &state,
-                                const std::vector<std::size_t> &) override {
+                                const std::vector<std::size_t> &noiseIndices) override {
         const std::size_t baseCount = parameters_.nx * parameters_.ny;
         if (state.size() != baseCount)
             throw std::runtime_error("invalid initial state size");
@@ -116,19 +130,30 @@ class MpiBackend final : public NonlinearBackend {
                     (*localFields[field])[mode.paddedIndex] =
                         (*globalFields[field])[mode.baseIndex];
         }
-        if (parameters_.forcingEnabled && parameters_.forcingProfile != ForcingProfile::singleMode)
-            localNoise_.resize(state_.size());
+        noisePaddedIndices_.clear();
+        localNoise_.clear();
+        if (parameters_.forcingEnabled &&
+            parameters_.forcingProfile != ForcingProfile::singleMode) {
+            localNoise_.assign(state_.size(), Complex{});
+            for (const auto index : noiseIndices) {
+                const auto padded = paddedIndexForBaseMode(parameters_, index);
+                const auto row = static_cast<ptrdiff_t>(padded / parameters_.mx());
+                if (row < firstRow_ || row >= firstRow_ + localRows_)
+                    throw std::runtime_error("MPI noise mode is not locally owned");
+                noisePaddedIndices_.push_back(padded - static_cast<std::size_t>(firstRow_) *
+                                                           parameters_.mx());
+            }
+        }
         workspace_.initialize(state_.size(), parameters_.nonlinearStageCount());
     }
 
     void advanceTimeStep(const SpectralField &noise) override {
-        if (!noise.empty() && (noise.size() != parameters_.nx * parameters_.ny ||
-                               localNoise_.size() != state_.size()))
+        if (!noise.empty() &&
+            (noise.size() != noisePaddedIndices_.size() || localNoise_.size() != state_.size()))
             throw std::runtime_error("invalid MPI stochastic-noise field");
         if (!noise.empty()) {
-            std::fill(localNoise_.begin(), localNoise_.end(), Complex{});
-            for (const LocalMode &mode : localModes_)
-                localNoise_[mode.paddedIndex] = noise[mode.baseIndex];
+            forEachIndex(noise.size(),
+                         [&](std::size_t i) { localNoise_[noisePaddedIndices_[i]] = noise[i]; });
         }
         const SpectralField &stepNoise = noise.empty() ? noise : localNoise_;
         const auto rhs = [&](const SpectralField &input, SpectralField &output) {
@@ -164,16 +189,16 @@ class MpiBackend final : public NonlinearBackend {
         std::copy(localState.begin(), localState.end(), paddedSpectrum_.begin());
         fftw_execute(inversePsi_);
         const std::size_t localCount = static_cast<std::size_t>(localRows_) * parameters_.mx();
-        squarePointwise(psi_, projectedSquare_, localCount);
-        fftw_execute(forwardSquare_);
-        filterPaddedSpectrum(squareSpectrum_, parameters_, static_cast<std::size_t>(firstRow_),
-                             static_cast<std::size_t>(localRows_));
-        fftw_execute(inverseSquare_);
-        multiplyConjugatePointwise(projectedSquare_, psi_, paddedSpectrum_, localCount);
+        densityPointwise(psi_, projectedDensity_, localCount);
+        fftw_execute(forwardDensity_);
+        filterDensitySpectrum(densitySpectrum_, parameters_, static_cast<std::size_t>(firstRow_),
+                              static_cast<std::size_t>(localRows_));
+        fftw_execute(inverseDensity_);
+        multiplyPointwise(projectedDensity_, psi_, paddedSpectrum_, localCount);
         fftw_execute(forwardNonlinear_);
         forEachIndex(localModes_.size(), [&](std::size_t i) {
             const LocalMode &mode = localModes_[i];
-            result[mode.paddedIndex] = mode.nonlinearFactor * squareSpectrum_[mode.paddedIndex];
+            result[mode.paddedIndex] = mode.nonlinearFactor * densitySpectrum_[mode.paddedIndex];
         });
     }
 
@@ -235,8 +260,9 @@ class MpiBackend final : public NonlinearBackend {
 
     Parameters parameters_;
     ptrdiff_t allocLocal_ = 0, localRows_ = 0, firstRow_ = 0;
-    FftwComplexField paddedSpectrum_, psi_, squareSpectrum_, projectedSquare_;
+    FftwComplexField paddedSpectrum_, psi_, densitySpectrum_, projectedDensity_;
     SpectralField state_, deterministicForcing_, localNoise_;
+    std::vector<std::size_t> noisePaddedIndices_;
     IntegrationCoefficients coefficients_;
     HostIntegrationWorkspace workspace_;
     std::vector<LocalMode> localModes_;
@@ -244,7 +270,7 @@ class MpiBackend final : public NonlinearBackend {
     std::vector<int> outputCounts_, outputDisplacements_;
     std::vector<std::uint64_t> outputBaseIndices_;
     SpectralField packedOutput_, gatheredOutput_;
-    FftwPlan inversePsi_, forwardSquare_, inverseSquare_, forwardNonlinear_;
+    FftwPlan inversePsi_, forwardDensity_, inverseDensity_, forwardNonlinear_;
 };
 } // namespace
 
@@ -267,10 +293,22 @@ void backendInitialize(int &argc, char **&argv) {
     fftw_mpi_init();
 }
 
-void backendFinalize() {
-    fftw_mpi_gather_wisdom(MPI_COMM_WORLD);
-    if (rank == 0)
-        saveFftwWisdom();
+void backendFinalize(bool writeWisdom) {
+    std::string wisdomError;
+    int failed = 0;
+    if (writeWisdom) {
+        fftw_mpi_gather_wisdom(MPI_COMM_WORLD);
+        if (rank == 0) {
+            try {
+                saveFftwWisdom();
+            } catch (const std::exception &error) {
+                wisdomError = error.what();
+                failed = 1;
+            }
+        }
+        mpiCheck(MPI_Bcast(&failed, 1, MPI_INT, 0, MPI_COMM_WORLD),
+                 "MPI_Bcast wisdom export status");
+    }
     fftw_mpi_cleanup();
 #ifdef GP2D_HAVE_FFTW_THREADS
     if (fftwThreadsInitialized) {
@@ -282,6 +320,9 @@ void backendFinalize() {
     MPI_Finalized(&finalized);
     if (!finalized)
         MPI_Finalize();
+    if (failed)
+        throw std::runtime_error(rank == 0 ? wisdomError
+                                           : "rank zero could not export FFTW wisdom");
 }
 void backendAbort(int exitCode) { MPI_Abort(MPI_COMM_WORLD, exitCode); }
 void backendBarrier() { mpiCheck(MPI_Barrier(MPI_COMM_WORLD), "MPI_Barrier"); }

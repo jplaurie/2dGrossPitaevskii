@@ -209,13 +209,19 @@ def spectral_abscissa(
 
 
 def density_in_frequency(
-    k: np.ndarray, values: np.ndarray, dispersion_coefficient: float
+    k: np.ndarray, values: np.ndarray, dispersion_coefficient: float,
+    *, bin_width: float = 1.0,
 ) -> np.ndarray:
-    """Convert a density per unit k to one per unit angular frequency."""
+    """Convert shell totals to frequency density using their wavenumber width.
+
+    For values already normalized per unit k, leave bin_width at one.
+    """
+    if not np.isfinite(bin_width) or bin_width <= 0.0:
+        raise ValueError("spectrum bin width must be finite and positive")
     jacobian = 2.0 * abs(dispersion_coefficient) * np.asarray(k)
     return np.divide(
         values,
-        jacobian,
+        jacobian * bin_width,
         out=np.full_like(np.asarray(values, dtype=float), np.nan),
         where=jacobian > 0.0,
     )

@@ -236,7 +236,7 @@ if(BUILD_TESTING)
     target_link_libraries(gp2d_numerics_tests PRIVATE ${FFTW_THREADS_LIBRARY})
     target_compile_definitions(gp2d_numerics_tests PRIVATE GP2D_HAVE_FFTW_THREADS=1)
   endif()
-  add_test(NAME nonlinear_direct_dft COMMAND gp2d_numerics_tests)
+  add_test(NAME nonlinear_conservation COMMAND gp2d_numerics_tests)
   add_executable(gp2d_runtime_guard_tests tests/runtime_guards.cpp)
   target_link_libraries(gp2d_runtime_guard_tests PRIVATE gp2d_common)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -258,6 +258,14 @@ if(BUILD_TESTING)
            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/initial_conditions_smoke.cmake")
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy, matplotlib"
+      RESULT_VARIABLE GP2D_PLOTTING_IMPORT_STATUS OUTPUT_QUIET ERROR_QUIET)
+    if(GP2D_PLOTTING_IMPORT_STATUS EQUAL 0)
+      add_test(NAME plotting_normalization COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/plotting.py)
+      set_tests_properties(plotting_normalization PROPERTIES
+        ENVIRONMENT "MPLCONFIGDIR=${CMAKE_CURRENT_BINARY_DIR}/matplotlib-cache;MPLBACKEND=Agg")
+    endif()
     add_test(NAME regression_cpu COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression.py cpu
       --cpu $<TARGET_FILE:gross_pitaevskii_cpu>)
@@ -268,7 +276,8 @@ if(BUILD_TESTING)
       add_test(NAME hdf5_output COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/hdf5_output.py
         --cpu $<TARGET_FILE:gross_pitaevskii_cpu>
-        --exporter $<TARGET_FILE:gp2d_hdf5_export>)
+        --exporter $<TARGET_FILE:gp2d_hdf5_export>
+        --writer $<TARGET_FILE:gp2d_hdf5_validation_tests>)
     endif()
     if(GP2D_BACKEND_TESTS)
       foreach(backend IN ITEMS mpi cuda cuda_mixed)

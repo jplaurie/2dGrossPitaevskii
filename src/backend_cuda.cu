@@ -118,21 +118,21 @@ __global__ void embedBaseSpectrum(const cufftDoubleComplex *input, TransformComp
     padded[i] = {static_cast<TransformReal>(value.x), static_cast<TransformReal>(value.y)};
 }
 
-__global__ void squareField(const TransformComplex *input, TransformComplex *output,
-                            std::size_t count) {
+__global__ void densityField(const TransformComplex *input, TransformComplex *output,
+                             std::size_t count) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i < count)
-        output[i] = input[i] * input[i];
+        output[i] = {input[i].x * input[i].x + input[i].y * input[i].y, 0};
 }
 
-__global__ void filterProjectedSquare(TransformComplex *field, std::size_t nx, std::size_t ny,
-                                      std::size_t mx, std::size_t my, TransformReal scale) {
+__global__ void filterProjectedDensity(TransformComplex *field, std::size_t nx, std::size_t ny,
+                                       std::size_t mx, std::size_t my, TransformReal scale) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= mx * my)
         return;
     const long kx = deviceWave(i % mx, mx), ky = deviceWave(i / mx, my);
-    if (kx >= -static_cast<long>(nx / 2) && kx < static_cast<long>(nx / 2) &&
-        ky >= -static_cast<long>(ny / 2) && ky < static_cast<long>(ny / 2)) {
+    if (kx > -static_cast<long>(nx / 2) && kx < static_cast<long>(nx / 2) &&
+        ky > -static_cast<long>(ny / 2) && ky < static_cast<long>(ny / 2)) {
         field[i].x *= scale;
         field[i].y *= scale;
     } else {
@@ -140,13 +140,12 @@ __global__ void filterProjectedSquare(TransformComplex *field, std::size_t nx, s
     }
 }
 
-__global__ void formCubicProduct(const TransformComplex *square, const TransformComplex *psi,
+__global__ void formCubicProduct(const TransformComplex *density, const TransformComplex *psi,
                                  TransformComplex *output, std::size_t count) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= count)
         return;
-    const TransformComplex conjugate{psi[i].x, -psi[i].y};
-    output[i] = square[i] * conjugate;
+    output[i] = density[i] * psi[i];
 }
 
 __global__ void extractNonlinearTerm(const TransformComplex *padded, cufftDoubleComplex *output,
@@ -238,16 +237,19 @@ class CudaBackend final : public NonlinearBackend {
     explicit CudaBackend(const Parameters &parameters)
         : parameters_(parameters), baseCount_(parameters.nx * parameters.ny),
           paddedCount_(parameters.mx() * parameters.my()), wavefunction_(baseCount_),
-          nonlinearTerm_(baseCount_), paddedSpectrum_(paddedCount_), psi_(paddedCount_),
-          projectedSquare_(paddedCount_), squareSpectrum_(paddedCount_),
+          nonlinearTerm_(baseCount_),
           compactNoiseEnabled_(!environmentEnabled("GP2D_CUDA_FULL_NOISE")),
           profileEnabled_(environmentEnabled("GP2D_CUDA_PROFILE")),
           graphEnabled_(parameters.cudaGraphEnabled) {
         cudaCheck(cudaStreamCreate(&stream_), "create CUDA integration stream");
-        cufftCheck(cufftPlan2d(&plan_, static_cast<int>(parameters.my()),
-                               static_cast<int>(parameters.mx()), transformType),
-                   "create dealiased transform plan");
-        cufftCheck(cufftSetStream(plan_, stream_), "attach cuFFT plan to integration stream");
+        if (parameters.nonlinearityCoefficient != 0.0) {
+            for (auto *buffer : {&paddedSpectrum_, &psi_, &projectedDensity_, &densitySpectrum_})
+                buffer->allocate(paddedCount_);
+            cufftCheck(cufftPlan2d(&plan_, static_cast<int>(parameters.my()),
+                                   static_cast<int>(parameters.mx()), transformType),
+                       "create dealiased transform plan");
+            cufftCheck(cufftSetStream(plan_, stream_), "attach cuFFT plan to integration stream");
+        }
         if (profileEnabled_) {
             cudaCheck(cudaEventCreate(&profileStart_), "create CUDA profile event");
             cudaCheck(cudaEventCreate(&profileNoiseReady_), "create CUDA noise profile event");
@@ -495,25 +497,25 @@ class CudaBackend final : public NonlinearBackend {
         cudaCheck(cudaGetLastError(), "embed device spectral field");
         executeTransform(paddedSpectrum_.data(), psi_.data(), CUFFT_INVERSE,
                          "execute wavefunction inverse transform");
-        squareField<<<blocks(paddedCount_), threads, 0, stream_>>>(
-            psi_.data(), projectedSquare_.data(), paddedCount_);
-        cudaCheck(cudaGetLastError(), "square device wavefunction");
-        executeTransform(projectedSquare_.data(), squareSpectrum_.data(), CUFFT_FORWARD,
-                         "execute square forward transform");
+        densityField<<<blocks(paddedCount_), threads, 0, stream_>>>(
+            psi_.data(), projectedDensity_.data(), paddedCount_);
+        cudaCheck(cudaGetLastError(), "form device density");
+        executeTransform(projectedDensity_.data(), densitySpectrum_.data(), CUFFT_FORWARD,
+                         "execute density forward transform");
         const double scale = 1.0 / static_cast<double>(paddedCount_);
-        filterProjectedSquare<<<blocks(paddedCount_), threads, 0, stream_>>>(
-            squareSpectrum_.data(), parameters_.nx, parameters_.ny, parameters_.mx(),
+        filterProjectedDensity<<<blocks(paddedCount_), threads, 0, stream_>>>(
+            densitySpectrum_.data(), parameters_.nx, parameters_.ny, parameters_.mx(),
             parameters_.my(), static_cast<TransformReal>(scale));
-        cudaCheck(cudaGetLastError(), "filter square convolution");
-        executeTransform(squareSpectrum_.data(), projectedSquare_.data(), CUFFT_INVERSE,
-                         "execute filtered-square inverse transform");
+        cudaCheck(cudaGetLastError(), "filter density convolution");
+        executeTransform(densitySpectrum_.data(), projectedDensity_.data(), CUFFT_INVERSE,
+                         "execute filtered-density inverse transform");
         formCubicProduct<<<blocks(paddedCount_), threads, 0, stream_>>>(
-            projectedSquare_.data(), psi_.data(), paddedSpectrum_.data(), paddedCount_);
+            projectedDensity_.data(), psi_.data(), paddedSpectrum_.data(), paddedCount_);
         cudaCheck(cudaGetLastError(), "form cubic device nonlinearity");
-        executeTransform(paddedSpectrum_.data(), squareSpectrum_.data(), CUFFT_FORWARD,
+        executeTransform(paddedSpectrum_.data(), densitySpectrum_.data(), CUFFT_FORWARD,
                          "execute nonlinear forward transform");
         extractNonlinearTerm<<<blocks(baseCount_), threads, 0, stream_>>>(
-            squareSpectrum_.data(), output, parameters_.nx, parameters_.ny, parameters_.mx(),
+            densitySpectrum_.data(), output, parameters_.nx, parameters_.ny, parameters_.mx(),
             parameters_.my(), parameters_.lx(), parameters_.ly(),
             parameters_.nonlinearityCoefficient, parameters_.ginzburgLandauDamping,
             parameters_.ginzburgLandauCutoff, scale);
@@ -532,7 +534,7 @@ class CudaBackend final : public NonlinearBackend {
     Parameters parameters_;
     std::size_t baseCount_, paddedCount_;
     DeviceBuffer<cufftDoubleComplex> wavefunction_, nonlinearTerm_;
-    DeviceBuffer<TransformComplex> paddedSpectrum_, psi_, projectedSquare_, squareSpectrum_;
+    DeviceBuffer<TransformComplex> paddedSpectrum_, psi_, projectedDensity_, densitySpectrum_;
     std::array<DeviceBuffer<cufftDoubleComplex>, 10> coefficientBuffers_;
     std::array<DeviceBuffer<cufftDoubleComplex>, 7> stageBuffers_;
     DeviceBuffer<cufftDoubleComplex> forcing_, noise_, compactNoise_;
@@ -551,7 +553,10 @@ class CudaBackend final : public NonlinearBackend {
 } // namespace
 
 void backendInitialize(int &, char **&) { cudaCheck(cudaFree(nullptr), "initialize CUDA"); }
-void backendFinalize() { saveFftwWisdom(); }
+void backendFinalize(bool writeWisdom) {
+    if (writeWisdom)
+        saveFftwWisdom();
+}
 void backendAbort(int) {}
 void backendBarrier() { cudaCheck(cudaDeviceSynchronize(), "synchronize CUDA device"); }
 bool backendIsRoot() { return true; }

@@ -105,26 +105,30 @@ double writeDiagnostics(const Parameters &parameters, BaseTransform &transform, 
             quadraticShell[bin] += weight * transfer;
         }
     }
-    SpectralField square, conservativeSquareRate;
-    transform.projectedSquareSpectra(wavefunction, hamiltonianRate, square, conservativeSquareRate);
+    SpectralField density, conservativeDensityRate;
+    enforceStateConstraints(hamiltonianRate, parameters);
+    if (parameters.nonlinearityCoefficient != 0.0)
+        transform.projectedDensitySpectra(wavefunction, hamiltonianRate, density,
+                                          conservativeDensityRate);
     // The two-pass cubic backend is the gradient of
-    // (g/2) * ||P(psi^2)||^2, where P retains the base spectral band.
+    // (g/2) * ||P(|psi|^2)||^2, with a conjugate-symmetric density band.
     // Using base-grid |psi|^4 here would describe a different Hamiltonian.
     double nonlinearEnergy = 0.0;
-    for (const Complex value : square)
+    for (const Complex value : density)
         nonlinearEnergy += std::norm(value);
     nonlinearEnergy *= 0.5 * area * parameters.nonlinearityCoefficient;
     const double totalEnergy = kineticEnergy + potentialEnergy + nonlinearEnergy;
     std::vector<double> fullEnergyShell = quadraticShell;
-    for (std::size_t y = 0; y < parameters.ny; ++y)
-        for (std::size_t x = 0; x < parameters.nx; ++x) {
-            const std::size_t index = spectralIndex(x, y, parameters.nx);
-            const std::size_t bin =
-                static_cast<std::size_t>(std::sqrt(waveNumberSquared(parameters, x, y)) / binWidth);
-            fullEnergyShell[bin] -=
-                area * parameters.nonlinearityCoefficient *
-                std::real(std::conj(square[index]) * conservativeSquareRate[index]);
-        }
+    if (parameters.nonlinearityCoefficient != 0.0)
+        for (std::size_t y = 0; y < parameters.ny; ++y)
+            for (std::size_t x = 0; x < parameters.nx; ++x) {
+                const std::size_t index = spectralIndex(x, y, parameters.nx);
+                const std::size_t bin = static_cast<std::size_t>(
+                    std::sqrt(waveNumberSquared(parameters, x, y)) / binWidth);
+                fullEnergyShell[bin] -=
+                    area * parameters.nonlinearityCoefficient *
+                    std::real(std::conj(density[index]) * conservativeDensityRate[index]);
+            }
     std::vector<double> waveFlux(bins), fullEnergyFlux(bins);
     double cumulativeWave = 0.0, cumulativeEnergy = 0.0;
     for (std::size_t i = 0; i < bins; ++i) {

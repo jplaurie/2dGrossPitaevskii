@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <utility>
 
 namespace {
 unsigned planningFlags = FFTW_ESTIMATE;
@@ -29,28 +30,30 @@ void configureFftw(const Parameters &parameters, bool importWisdom) {
 }
 
 void saveFftwWisdom() {
-    if (!wisdomPath.empty() && !fftw_export_wisdom_to_filename(wisdomPath.c_str()))
-        throw std::runtime_error("cannot export FFTW wisdom: " + wisdomPath.string());
+    // Consume the request even if export fails: error cleanup must not retry it.
+    const auto path = std::exchange(wisdomPath, {});
+    if (!path.empty() && !fftw_export_wisdom_to_filename(path.c_str()))
+        throw std::runtime_error("cannot export FFTW wisdom: " + path.string());
 }
 
 unsigned fftwPlanningFlags() { return planningFlags; }
 
-class BaseTransform::SquareTransform {
+class BaseTransform::DensityTransform {
   public:
-    explicit SquareTransform(const Parameters &parameters)
+    explicit DensityTransform(const Parameters &parameters)
         : parameters_(parameters), field_(parameters.mx() * parameters.my()),
           rate_(parameters.mx() * parameters.my()), work_(parameters.mx() * parameters.my()) {
         inverse_ = makePlan(field_, FFTW_BACKWARD);
         forward_ = makePlan(work_, FFTW_FORWARD);
         if (!inverse_ || !forward_)
-            throw std::runtime_error("FFTW could not create square-transform plans");
+            throw std::runtime_error("FFTW could not create density-transform plans");
     }
 
     void evaluate(const SpectralField &spectral, const SpectralField &spectralRate,
-                  SpectralField &square, SpectralField &squareRate) {
+                  SpectralField &density, SpectralField &densityRate) {
         load(spectral, field_);
-        transformProduct(field_, field_, 1.0, square);
-        transformRate(spectralRate, squareRate);
+        transformProduct(field_, field_, 1.0, density);
+        transformRate(spectralRate, densityRate);
     }
 
   private:
@@ -62,7 +65,7 @@ class BaseTransform::SquareTransform {
 
     void load(const SpectralField &input, FftwComplexField &padded) {
         if (input.size() != parameters_.nx * parameters_.ny)
-            throw std::runtime_error("invalid square-transform input size");
+            throw std::runtime_error("invalid density-transform input size");
         std::fill(padded.begin(), padded.end(), Complex{});
         forEachIndex(input.size(), [&](std::size_t i) {
             padded[paddedIndexForBaseMode(parameters_, i)] = input[i];
@@ -77,7 +80,9 @@ class BaseTransform::SquareTransform {
 
     void transformProduct(const FftwComplexField &left, const FftwComplexField &right,
                           double factor, SpectralField &output) {
-        forEachIndex(work_.size(), [&](std::size_t i) { work_[i] = factor * left[i] * right[i]; });
+        forEachIndex(work_.size(), [&](std::size_t i) {
+            work_[i] = factor * std::real(std::conj(left[i]) * right[i]);
+        });
         fftw_execute(forward_);
         extract(work_, output);
     }
@@ -86,7 +91,11 @@ class BaseTransform::SquareTransform {
         output.resize(parameters_.nx * parameters_.ny);
         const double scale = 1.0 / static_cast<double>(parameters_.mx() * parameters_.my());
         forEachIndex(output.size(), [&](std::size_t i) {
-            output[i] = scale * padded[paddedIndexForBaseMode(parameters_, i)];
+            const auto x = i % parameters_.nx, y = i / parameters_.nx;
+            output[i] = retainedDensityWave(signedWave(x, parameters_.nx), parameters_.nx) &&
+                                retainedDensityWave(signedWave(y, parameters_.ny), parameters_.ny)
+                            ? scale * padded[paddedIndexForBaseMode(parameters_, i)]
+                            : Complex{};
         });
     }
 
@@ -95,27 +104,27 @@ class BaseTransform::SquareTransform {
     FftwPlan inverse_, forward_;
 };
 
-void squarePointwise(const FftwComplexField &input, FftwComplexField &output, std::size_t count) {
-    forEachIndex(count, [&](std::size_t i) { output[i] = input[i] * input[i]; });
+void densityPointwise(const FftwComplexField &input, FftwComplexField &output, std::size_t count) {
+    forEachIndex(count, [&](std::size_t i) { output[i] = std::norm(input[i]); });
 }
 
-void filterPaddedSpectrum(FftwComplexField &field, const Parameters &parameters,
-                          std::size_t firstRow, std::size_t rowCount) {
+void filterDensitySpectrum(FftwComplexField &field, const Parameters &parameters,
+                           std::size_t firstRow, std::size_t rowCount) {
     const std::size_t count = rowCount * parameters.mx();
     const double scale = 1.0 / static_cast<double>(parameters.mx() * parameters.my());
     forEachIndex(count, [&](std::size_t i) {
         const std::size_t x = i % parameters.mx(), y = firstRow + i / parameters.mx();
-        if (retainedPaddedWave(signedWave(x, parameters.mx()), parameters.nx) &&
-            retainedPaddedWave(signedWave(y, parameters.my()), parameters.ny))
+        if (retainedDensityWave(signedWave(x, parameters.mx()), parameters.nx) &&
+            retainedDensityWave(signedWave(y, parameters.my()), parameters.ny))
             field[i] *= scale;
         else
             field[i] = Complex{};
     });
 }
 
-void multiplyConjugatePointwise(const FftwComplexField &left, const FftwComplexField &right,
-                                FftwComplexField &output, std::size_t count) {
-    forEachIndex(count, [&](std::size_t i) { output[i] = left[i] * std::conj(right[i]); });
+void multiplyPointwise(const FftwComplexField &left, const FftwComplexField &right,
+                       FftwComplexField &output, std::size_t count) {
+    forEachIndex(count, [&](std::size_t i) { output[i] = left[i] * right[i]; });
 }
 
 BaseTransform::BaseTransform(const Parameters &parameters)
@@ -152,10 +161,10 @@ void BaseTransform::inverse(const SpectralField &spectral, std::vector<Complex> 
     physical.assign(planningOutput_.begin(), planningOutput_.end());
 }
 
-void BaseTransform::projectedSquareSpectra(const SpectralField &spectral,
-                                           const SpectralField &spectralRate, SpectralField &square,
-                                           SpectralField &squareRate) {
-    if (!squareTransform_)
-        squareTransform_ = std::make_unique<SquareTransform>(parameters_);
-    squareTransform_->evaluate(spectral, spectralRate, square, squareRate);
+void BaseTransform::projectedDensitySpectra(const SpectralField &spectral,
+                                            const SpectralField &spectralRate,
+                                            SpectralField &density, SpectralField &densityRate) {
+    if (!densityTransform_)
+        densityTransform_ = std::make_unique<DensityTransform>(parameters_);
+    densityTransform_->evaluate(spectral, spectralRate, density, densityRate);
 }

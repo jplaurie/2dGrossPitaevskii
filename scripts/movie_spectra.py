@@ -77,8 +77,9 @@ def main() -> None:
         wave = np.asarray(rows["wave_action_spectrum"])
         energy = np.asarray(rows["quadratic_energy_spectrum"])
         if args.x_axis == "frequency" and args.frequency_density:
-            wave = density_in_frequency(k, wave, coefficient)
-            energy = density_in_frequency(k, energy, coefficient)
+            bin_width = float(k[1] - k[0])
+            wave = density_in_frequency(k, wave, coefficient, bin_width=bin_width)
+            energy = density_in_frequency(k, energy, coefficient, bin_width=bin_width)
         mask = np.isfinite(x) & np.isfinite(wave) & np.isfinite(energy)
         mask &= (x > 0.0) & (wave > 0.0) & (energy > 0.0)
         order = np.argsort(x[mask])

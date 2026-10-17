@@ -55,11 +55,11 @@ class FftwPlan {
     fftw_plan plan_ = nullptr;
 };
 
-void squarePointwise(const FftwComplexField &input, FftwComplexField &output, std::size_t count);
-void filterPaddedSpectrum(FftwComplexField &field, const Parameters &parameters,
-                          std::size_t firstRow, std::size_t rowCount);
-void multiplyConjugatePointwise(const FftwComplexField &left, const FftwComplexField &right,
-                                FftwComplexField &output, std::size_t count);
+void densityPointwise(const FftwComplexField &input, FftwComplexField &output, std::size_t count);
+void filterDensitySpectrum(FftwComplexField &field, const Parameters &parameters,
+                           std::size_t firstRow, std::size_t rowCount);
+void multiplyPointwise(const FftwComplexField &left, const FftwComplexField &right,
+                       FftwComplexField &output, std::size_t count);
 
 template <class Allocator> inline fftw_complex *fftwData(std::vector<Complex, Allocator> &field) {
     static_assert(sizeof(Complex) == sizeof(fftw_complex));
@@ -75,13 +75,13 @@ class BaseTransform {
 
     void forward(const std::vector<Complex> &physical, SpectralField &spectral);
     void inverse(const SpectralField &spectral, std::vector<Complex> &physical);
-    void projectedSquareSpectra(const SpectralField &spectral, const SpectralField &spectralRate,
-                                SpectralField &square, SpectralField &squareRate);
+    void projectedDensitySpectra(const SpectralField &spectral, const SpectralField &spectralRate,
+                                 SpectralField &density, SpectralField &densityRate);
 
   private:
-    class SquareTransform;
+    class DensityTransform;
     Parameters parameters_;
     FftwPlan forward_, inverse_;
     FftwComplexField planningInput_, planningOutput_;
-    std::unique_ptr<SquareTransform> squareTransform_;
+    std::unique_ptr<DensityTransform> densityTransform_;
 };

@@ -286,10 +286,11 @@ class Relaxer {
                               parameters_.chemicalPotential - driftX_ * kx - driftY_ * ky) *
                              std::norm(wavefunction[i]);
             }
-        SpectralField square, unused;
-        transform_.projectedSquareSpectra(wavefunction, zeroRate_, square, unused);
+        SpectralField density, unused;
+        if (parameters_.nonlinearityCoefficient != 0.0)
+            transform_.projectedDensitySpectra(wavefunction, zeroRate_, density, unused);
         double quartic = 0.0;
-        for (const Complex value : square)
+        for (const Complex value : density)
             quartic += std::norm(value);
         const double area = parameters_.lx() * parameters_.ly();
         return {area * (quadratic + 0.5 * parameters_.nonlinearityCoefficient * quartic),
@@ -394,12 +395,13 @@ int main(int argc, char **argv) {
             std::cout << "wrote relaxed wavefunction to " << command.outputFile << " after "
                       << completedSteps << " steps; final residual = " << residual << '\n';
         }
+        backendReady = false;
         backendFinalize();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "error: " << error.what() << '\n';
         if (backendReady)
-            backendFinalize();
+            backendFinalize(false);
         return 1;
     }
 }

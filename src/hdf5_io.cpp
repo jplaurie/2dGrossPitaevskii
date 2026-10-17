@@ -32,6 +32,14 @@ template <herr_t (*Close)(hid_t)> class Hdf5Handle {
         return *this;
     }
     [[nodiscard]] hid_t get() const { return id_; }
+    // Explicit close is used on the write path, where delayed I/O errors matter.
+    void closeChecked(const char *operation) {
+        if (id_ >= 0) {
+            if (Close(id_) < 0)
+                throw std::runtime_error(operation);
+            id_ = -1;
+        }
+    }
 
   private:
     hid_t id_ = -1;
@@ -175,6 +183,9 @@ void writeHdf5Field(const std::filesystem::path &path, const Parameters &paramet
     requireSuccess(
         H5Dwrite(dataset.get(), H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, values.data()),
         "cannot write HDF5 wavefunction dataset");
+    requireSuccess(H5Fflush(file.get(), H5F_SCOPE_GLOBAL), "cannot flush HDF5 wavefunction");
+    dataset.closeChecked("cannot close HDF5 wavefunction dataset");
+    file.closeChecked("cannot close HDF5 wavefunction file");
 #else
     (void)path;
     (void)parameters;

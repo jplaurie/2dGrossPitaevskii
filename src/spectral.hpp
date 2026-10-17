@@ -19,6 +19,12 @@ inline bool retainedPaddedWave(long wave, std::size_t baseCount) {
     return wave >= -static_cast<long>(baseCount / 2) && wave < static_cast<long>(baseCount / 2);
 }
 
+// Density is real: retain conjugate pairs and discard both Nyquist planes.
+// A half-open band would make P(|psi|^2) complex and break its Hamiltonian.
+inline bool retainedDensityWave(long wave, std::size_t baseCount) {
+    return wave > -static_cast<long>(baseCount / 2) && wave < static_cast<long>(baseCount / 2);
+}
+
 inline std::size_t paddedIndexForBase(std::size_t index, std::size_t baseCount,
                                       std::size_t paddedCount) {
     const long wave = signedWave(index, baseCount);
