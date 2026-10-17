@@ -198,10 +198,22 @@ struct DeviceStages {
 __global__ void advanceIntegrationStage(int stage, Integrator method, double h, std::size_t count,
                                         CoefficientPointers<cufftDoubleComplex> coeff,
                                         cufftDoubleComplex *state, DeviceStages s,
-                                        const cufftDoubleComplex *noise) {
+                                        const cufftDoubleComplex *noise, bool suppressMean) {
     const std::size_t i = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= count)
         return;
+    // Keep every stage in the constrained subspace before evaluating its RHS.
+    if (suppressMean && i == 0) {
+        if (stage == 0)
+            s.stageA[i] = {0.0, 0.0};
+        else if (stage == 1)
+            s.stageB[i] = {0.0, 0.0};
+        else if (stage == 2)
+            s.stageC[i] = {0.0, 0.0};
+        else
+            state[i] = {0.0, 0.0};
+        return;
+    }
     if (stage == 0)
         s.stageA[i] = integrationStageA(method, h, i, coeff, state[i], s.nonlinearAtStart[i]);
     else if (stage == 1)
@@ -219,11 +231,6 @@ __global__ void advanceIntegrationStage(int stage, Integrator method, double h, 
         if (noise)
             state[i] = state[i] + noise[i];
     }
-}
-
-__global__ void suppressZeroMode(cufftDoubleComplex *state) {
-    if (blockIdx.x == 0 && threadIdx.x == 0)
-        state[0] = {0.0, 0.0};
 }
 
 class CudaBackend final : public NonlinearBackend {
@@ -407,10 +414,6 @@ class CudaBackend final : public NonlinearBackend {
             rightHandSide(stages_.stageC, stages_.nonlinearAtStageC);
         }
         launchStage(3);
-        if (parameters_.hypoviscosity > 0.0 && parameters_.hypoviscosityOrder < 0.0) {
-            suppressZeroMode<<<1, 1, 0, stream_>>>(wavefunction_.data());
-            cudaCheck(cudaGetLastError(), "suppress device zero mode");
-        }
     }
 
     void downloadState(SpectralField &state) override {
@@ -466,7 +469,8 @@ class CudaBackend final : public NonlinearBackend {
     void launchStage(int stage) {
         advanceIntegrationStage<<<blocks(baseCount_), threads, 0, stream_>>>(
             stage, parameters_.integrator, parameters_.timeStep, baseCount_, coefficients_,
-            wavefunction_.data(), stages_, noise_.data());
+            wavefunction_.data(), stages_, noise_.data(),
+            parameters_.hypoviscosity > 0.0 && parameters_.hypoviscosityOrder < 0.0);
         cudaCheck(cudaGetLastError(), "integrate device Runge-Kutta stage");
     }
 
@@ -480,6 +484,11 @@ class CudaBackend final : public NonlinearBackend {
     }
 
     void evaluateDevice(const cufftDoubleComplex *state, cufftDoubleComplex *output) {
+        if (parameters_.nonlinearityCoefficient == 0.0) {
+            cudaCheck(cudaMemsetAsync(output, 0, baseCount_ * sizeof(cufftDoubleComplex), stream_),
+                      "clear zero nonlinear term");
+            return;
+        }
         embedBaseSpectrum<<<blocks(paddedCount_), threads, 0, stream_>>>(
             state, paddedSpectrum_.data(), parameters_.nx, parameters_.ny, parameters_.mx(),
             parameters_.my());

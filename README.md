@@ -125,7 +125,8 @@ f_{\mathrm{logNormal}}(k)
 The parameters $A,k_f,\Delta k=\sigma_f,s,\sigma_{\log}$ are
 `forcingAmplitude`, `forcingWavenumber`, `forcingWidth`,
 `forcingShapeOrder`, and `forcingLogWidth`. A positive
-`targetWaveActionInjectionRate` rescales the stochastic amplitudes.
+`targetWaveActionInjectionRate` rescales the stochastic amplitudes; when it is
+positive, the common positive `forcingAmplitude` cancels during normalization.
 `singleMode` is instead deterministic: it applies amplitude $A$ at the four
 Fourier-index pairs $(m_x,m_y)=(\pm m,\pm m)$, with
 $m=\texttt{forcingWavenumber}$.
@@ -339,8 +340,8 @@ true; disabled forcing parameters are parsed but otherwise ignored.
 performance; `fftwWisdomFile` persists those plans and MPI broadcasts/gathers
 wisdom across ranks.
 For negative `hypoviscosityOrder`, the hypoviscous multiplier is singular at
-`k=0`. The mean mode is therefore explicitly set to zero on initialization and
-after every time step.
+`k=0`. The mean mode is therefore explicitly set to zero on initialization,
+including restart, and at every integration stage.
 
 An initial-condition file may be either an HDF5 snapshot or contain `2*nx*ny`
 whitespace-delimited numbers ordered as row-major `real imag` pairs. Both
@@ -413,7 +414,8 @@ contribution for stochastic forcing.
 When `restart_state.txt` exists, the solver resumes automatically.
 `numberOfSteps` means additional steps, CSV files append, and frame numbering
 continues. Matching `nx`, `ny`, and `aspectRatio` are required; physical
-parameters may change between invocations. Output frames are journaled and
+parameters may change between invocations. The original initial-condition file
+is not needed to resume a checkpoint. Output frames are journaled and
 committed atomically, so a partially written frame is rolled back on restart.
 Launch the replacement executable from the same working directory, or change
 `dataDirectory` and `outputDirectory` to absolute paths, so relative paths still

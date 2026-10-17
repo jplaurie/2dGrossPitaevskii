@@ -225,8 +225,8 @@ RestartState readRestart(const Parameters &parameters, BaseTransform &transform,
     }
     if (state.wavefunction.empty()) {
         transform.forward(physical, state.wavefunction);
-        enforceStateConstraints(state.wavefunction, parameters);
     }
+    enforceStateConstraints(state.wavefunction, parameters);
     if (!finiteField(state.wavefunction))
         throw std::runtime_error("initial wavefunction contains non-finite coefficients");
     return state;

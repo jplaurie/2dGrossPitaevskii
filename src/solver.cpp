@@ -172,7 +172,15 @@ void Solver::buildIntegrationCoefficients() {
 }
 
 void Solver::buildForcing() {
-    const long mode = static_cast<long>(parameters_.forcingWavenumber);
+    const long mode = parameters_.forcingProfile == ForcingProfile::singleMode
+                          ? static_cast<long>(parameters_.forcingWavenumber)
+                          : 0;
+    const bool normalize = parameters_.targetWaveActionInjectionRate > 0.0;
+    // The common amplitude cancels during normalization. Build the envelope
+    // at unit amplitude so squaring a very large or small configured value
+    // cannot overflow or underflow before that cancellation.
+    const double profileAmplitude =
+        normalize && parameters_.forcingAmplitude > 0.0 ? 1.0 : parameters_.forcingAmplitude;
     const double maximumLog = std::log(std::numeric_limits<double>::max());
     for (std::size_t y = 0; y < parameters_.ny; ++y) {
         const long kyIndex = signedWave(y, parameters_.ny);
@@ -183,9 +191,9 @@ void Solver::buildForcing() {
             double amplitude = 0.0;
             if (k > 0.0 && parameters_.forcingProfile == ForcingProfile::annulus &&
                 std::abs(k - parameters_.forcingWavenumber) < parameters_.forcingWidth)
-                amplitude = parameters_.forcingAmplitude;
+                amplitude = profileAmplitude;
             else if (k > 0.0 && parameters_.forcingProfile == ForcingProfile::gaussian)
-                amplitude = parameters_.forcingAmplitude *
+                amplitude = profileAmplitude *
                             std::exp(-0.5 * std::pow((k - parameters_.forcingWavenumber) /
                                                          parameters_.forcingWidth,
                                                      2.0));
@@ -194,39 +202,65 @@ void Solver::buildForcing() {
                     parameters_.forcingShapeOrder * std::log(k / parameters_.forcingWavenumber);
                 if (std::isfinite(logRatio) && logRatio <= maximumLog) {
                     const double ratio = std::exp(logRatio);
-                    amplitude = parameters_.forcingAmplitude * std::exp(logRatio - ratio);
+                    amplitude = profileAmplitude * std::exp(logRatio - ratio);
                 }
             } else if (k > 0.0 && parameters_.forcingProfile == ForcingProfile::logNormal)
-                amplitude = parameters_.forcingAmplitude *
+                amplitude = profileAmplitude *
                             std::exp(-0.5 * std::pow(std::log(k / parameters_.forcingWavenumber) /
                                                          parameters_.forcingLogWidth,
                                                      2.0));
             else if (parameters_.forcingProfile == ForcingProfile::singleMode &&
                      std::abs(kxIndex) == mode && std::abs(kyIndex) == mode)
-                amplitude = parameters_.forcingAmplitude;
+                amplitude = profileAmplitude;
             const std::size_t index = spectralIndex(x, y, parameters_.nx);
             forcingAmplitude_[index] = amplitude;
-            if (amplitude != 0.0) {
-                forcedIndices_.push_back(index);
-                ++forcedModeCount_;
-                waveActionInjectionCoefficient_ += amplitude * amplitude;
-                quadraticEnergyInjectionCoefficient_ +=
-                    (-parameters_.dispersionCoefficient * k2 + parameters_.chemicalPotential) *
-                    amplitude * amplitude;
-            }
         }
     }
-    if (forcedModeCount_ == 0)
+    const double maximumAmplitude =
+        *std::max_element(forcingAmplitude_.begin(), forcingAmplitude_.end());
+    if (!(maximumAmplitude > 0.0))
         throw std::runtime_error(
             "forcingEnabled is true, but the selected profile contains no modes");
-    if (parameters_.targetWaveActionInjectionRate > 0.0) {
+    if (normalize) {
+        double scaledPower = 0.0;
+        for (double value : forcingAmplitude_) {
+            const double relativeAmplitude = value / maximumAmplitude;
+            scaledPower += relativeAmplitude * relativeAmplitude;
+        }
         const double scale =
-            std::sqrt(parameters_.targetWaveActionInjectionRate / waveActionInjectionCoefficient_);
+            std::sqrt(parameters_.targetWaveActionInjectionRate) / std::sqrt(scaledPower);
         for (double &value : forcingAmplitude_)
-            value *= scale;
-        waveActionInjectionCoefficient_ *= scale * scale;
-        quadraticEnergyInjectionCoefficient_ *= scale * scale;
+            value = (value / maximumAmplitude) * scale;
     }
+    long double wavePower = 0.0L, quadraticPower = 0.0L;
+    for (std::size_t i = 0; i < forcingAmplitude_.size(); ++i) {
+        const double amplitude = forcingAmplitude_[i];
+        if (!std::isfinite(amplitude) || amplitude < 0.0)
+            throw std::runtime_error("forcing amplitudes are non-finite or negative");
+        if (amplitude == 0.0)
+            continue;
+        forcedIndices_.push_back(i);
+        const double k2 = waveNumberSquared(parameters_, i % parameters_.nx, i / parameters_.nx);
+        const long double power = static_cast<long double>(amplitude) * amplitude;
+        wavePower += power;
+        quadraticPower +=
+            (-parameters_.dispersionCoefficient * k2 + parameters_.chemicalPotential) * power;
+    }
+    forcedModeCount_ = forcedIndices_.size();
+    const long double coefficientLimit = std::numeric_limits<double>::max();
+    if (!std::isfinite(wavePower) || wavePower > coefficientLimit ||
+        !std::isfinite(quadraticPower) || std::abs(quadraticPower) > coefficientLimit)
+        throw std::runtime_error(
+            "forcing injection coefficients overflow or underflow; adjust the amplitude or "
+            "targetWaveActionInjectionRate");
+    waveActionInjectionCoefficient_ = static_cast<double>(wavePower);
+    quadraticEnergyInjectionCoefficient_ = static_cast<double>(quadraticPower);
+    if (!std::isfinite(waveActionInjectionCoefficient_) ||
+        !std::isfinite(quadraticEnergyInjectionCoefficient_) ||
+        !(waveActionInjectionCoefficient_ > 0.0))
+        throw std::runtime_error(
+            "forcing injection coefficients overflow or underflow; adjust the amplitude or "
+            "targetWaveActionInjectionRate");
     if (parameters_.forcingProfile != ForcingProfile::singleMode &&
         parameters_.nonlinearityCoefficient != 0.0) {
         const long minimumX = -static_cast<long>(parameters_.nx / 2);
@@ -270,6 +304,10 @@ void Solver::buildForcing() {
                 stochasticQuarticInjectionWeight_[spectralIndex(x, y, parameters_.nx)] =
                     2.0 * parameters_.nonlinearityCoefficient * acceptedForcingPower;
             }
+        if (!std::all_of(stochasticQuarticInjectionWeight_.begin(),
+                         stochasticQuarticInjectionWeight_.end(),
+                         [](double value) { return std::isfinite(value); }))
+            throw std::runtime_error("quartic forcing injection coefficients are non-finite");
     }
     if (!deterministicForcing_.empty())
         forEachIndex(deterministicForcing_.size(),

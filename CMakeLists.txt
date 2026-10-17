@@ -221,6 +221,11 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  if(TARGET gp2d_hdf5_export)
+    add_executable(gp2d_hdf5_validation_tests tests/hdf5_validation.cpp)
+    target_link_libraries(gp2d_hdf5_validation_tests PRIVATE gp2d_common)
+    add_test(NAME hdf5_metadata_validation COMMAND gp2d_hdf5_validation_tests)
+  endif()
   add_executable(gp2d_parameters_tests tests/parameters.cpp)
   target_link_libraries(gp2d_parameters_tests PRIVATE gp2d_common)
   add_test(NAME parameter_parsing COMMAND gp2d_parameters_tests)
@@ -281,6 +286,16 @@ if(BUILD_TESTING)
             --cpu $<TARGET_FILE:gross_pitaevskii_cpu>
             --candidate $<TARGET_FILE:gross_pitaevskii_${backend}> ${launcher})
           set_tests_properties(regression_${backend} PROPERTIES LABELS "backend" TIMEOUT 300)
+          if(backend STREQUAL "mpi")
+            # On the 12x14 grid, three ranks leave one padded slab without
+            # retained modes, exercising zero-count output gathers.
+            add_test(NAME regression_mpi_three_ranks COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/regression.py backend
+              --cpu $<TARGET_FILE:gross_pitaevskii_cpu>
+              --candidate $<TARGET_FILE:gross_pitaevskii_mpi> ${launcher} --mpi-ranks 3)
+            set_tests_properties(regression_mpi_three_ranks
+              PROPERTIES LABELS "backend" TIMEOUT 300)
+          endif()
         endif()
       endforeach()
     endif()

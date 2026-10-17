@@ -44,6 +44,10 @@ class CpuBackend final : public NonlinearBackend {
     void evaluate(const SpectralField &wavefunction, SpectralField &result) override {
         if (wavefunction.size() != parameters_.nx * parameters_.ny)
             throw std::runtime_error("invalid nonlinear input size");
+        if (parameters_.nonlinearityCoefficient == 0.0) {
+            result.assign(wavefunction.size(), Complex{});
+            return;
+        }
         std::fill(paddedSpectrum_.begin(), paddedSpectrum_.end(), Complex{});
         forEachIndex(paddedIndexByBaseMode_.size(), [&](std::size_t i) {
             paddedSpectrum_[paddedIndexByBaseMode_[i]] = wavefunction[i];

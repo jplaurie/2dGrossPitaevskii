@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import cmath
 import csv
 import math
 import struct
@@ -73,6 +74,68 @@ def initial_field(path, nx, ny):
                                           math.sin(2*angle_x-angle_y)))
                 row.extend((f"{value.real:.17g}", f"{value.imag:.17g}"))
             stream.write(" ".join(row) + "\n")
+
+
+def restart_constraints_checks(root, command, tolerance=5e-11):
+    initial = root / "restart_initial.dat"
+    initial_field(initial, 12, 14)
+    changed = root / "restart_changed_hypo"
+    common = dict(numberOfSteps=1, outputIntervalSteps=1, forcingEnabled="false",
+                  initialConditionFile=initial, threadCount=2)
+    run(command, write_params(changed, **common))
+    saved = changed / "data/wavefunction_00000001.dat"
+    constrained = common | dict(hypoviscosity=.03, hypoviscosityOrder=-1)
+    run(command, write_params(changed, **constrained))
+    fresh = root / "fresh_changed_hypo"
+    run(command, write_params(fresh, **(constrained | {"initialConditionFile": saved})))
+    error = relative_difference(checkpoint(changed, 2), checkpoint(fresh, 1))
+    assert error < tolerance, f"restart initialization constraints differ: {error}"
+
+    full = root / "missing_initial_full"
+    split = root / "missing_initial_split"
+    run(command, write_params(full, **(common | {"numberOfSteps": 2})))
+    params = write_params(split, **common)
+    run(command, params)
+    initial.unlink()
+    run(command, params)
+    assert checkpoint(full, 2) == checkpoint(split, 2), "restart requires its original IC"
+
+
+def normalized_forcing_checks(root, cpu):
+    for profile in ("annulus", "gaussian", "exponential", "logNormal"):
+        reference = None
+        for name, amplitude in (("unit", 1), ("large", "1e200"), ("small", "1e-200")):
+            case = root / f"normalized_{profile}_{name}"
+            run(cpu, write_params(case, forcingProfile=profile, forcingAmplitude=amplitude,
+                                  targetWaveActionInjectionRate=1))
+            values = checkpoint(case)
+            if reference is None:
+                reference = values
+            assert values == reference, "normalized forcing depends on the common amplitude"
+            assert max(map(abs, values)) > 0, "normalized forcing silently produced zero noise"
+            with (case / "output/forcing_summary.csv").open() as stream:
+                summary = next(csv.DictReader(stream))
+            assert math.isclose(float(summary["wave_action_injection_coefficient"]), 1, rel_tol=1e-14)
+            assert math.isfinite(float(summary["quadratic_energy_injection_coefficient"]))
+    overflowing = write_params(root / "forcing_overflow", forcingAmplitude="1e200")
+    run_error(cpu, overflowing, "forcing injection coefficients overflow or underflow")
+
+
+def linear_checks(root, command):
+    initial = root / "linear_initial.dat"
+    initial_field(initial, 12, 14)
+    for method in ("etd2", "etd3", "etd4", "rk2"):
+        case = root / f"linear_{method}"
+        run(command, write_params(case, integrator=method, initialConditionFile=initial,
+                                  forcingEnabled="false", nonlinearityCoefficient=0,
+                                  numberOfSteps=5, outputIntervalSteps=5))
+        before, after = checkpoint(case, 0), checkpoint(case, 1)
+        for y in range(14):
+            for x in range(12):
+                k2 = (signed_wave(x, 12) / 1.5) ** 2 + signed_wave(y, 14) ** 2
+                linear = complex(-1e-6 * k2 ** 2, -(k2 + .1))
+                expected = mode(before, 12, x, y) * cmath.exp(linear * 5 * 2e-4)
+                assert abs(mode(after, 12, x, y) - expected) < 5e-13
 
 
 def cpu_checks(root, cpu):
@@ -246,6 +309,9 @@ def cpu_checks(root, cpu):
     assert mode(final_checkpoint, 12, 0, 0) == 0
     assert (abs(mode(final_checkpoint, 12, 1, 0))
             < abs(mode(initial_checkpoint, 12, 1, 0)))
+    restart_constraints_checks(root, cpu)
+    normalized_forcing_checks(root, cpu)
+    linear_checks(root, cpu)
     print("CPU outputs and exact stochastic restart passed")
 
 
@@ -270,6 +336,11 @@ def backend_checks(root, cpu, candidate, tolerance):
                             forcingLogWidth=.3)),
         ("single_mode", dict(forcingProfile="singleMode")),
         ("unforced", dict(forcingEnabled="false")),
+        ("linear_cuda_graph", dict(forcingEnabled="false", nonlinearityCoefficient=0,
+                                   cudaGraphEnabled="true")),
+        ("linear_stochastic_cuda_graph", dict(nonlinearityCoefficient=0,
+                                              cudaGraphEnabled="true")),
+        ("linear_single_mode", dict(nonlinearityCoefficient=0, forcingProfile="singleMode")),
         ("ginzburg_hypo", dict(forcingEnabled="false",
                                 ginzburgLandauDamping=.2,
                                 ginzburgLandauCutoff=1,
@@ -318,6 +389,8 @@ def backend_checks(root, cpu, candidate, tolerance):
     run(candidate, split_params)
     run(candidate, split_params)
     assert checkpoint(full) == checkpoint(split), "candidate restart is not exact"
+    restart_constraints_checks(root, candidate, tolerance)
+    linear_checks(root, candidate)
     print("Integrators, forcing profiles, damping, and restart agree across backends "
           f"(maximum relative difference {largest_difference:.3g})")
 
@@ -328,15 +401,18 @@ def main():
     parser.add_argument("--cpu", required=True)
     parser.add_argument("--candidate")
     parser.add_argument("--mpiexec")
+    parser.add_argument("--mpi-ranks", type=int, default=2)
     parser.add_argument("--mpi-numproc-flag", default="-n")
     parser.add_argument("--tolerance", type=float, default=5e-11)
     args = parser.parse_args()
     if args.mode == "backend" and not args.candidate:
         parser.error("backend mode requires --candidate")
+    if args.mpi_ranks < 1:
+        parser.error("--mpi-ranks must be positive")
     cpu = [args.cpu]
     candidate = [args.candidate] if args.candidate else None
     if args.mpiexec:
-        candidate = [args.mpiexec, args.mpi_numproc_flag, "2", *candidate]
+        candidate = [args.mpiexec, args.mpi_numproc_flag, str(args.mpi_ranks), *candidate]
     with tempfile.TemporaryDirectory(prefix="gp2d-regression-") as temporary:
         if args.mode == "cpu":
             cpu_checks(Path(temporary), cpu)

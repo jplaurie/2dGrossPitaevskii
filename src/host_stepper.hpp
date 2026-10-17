@@ -46,18 +46,21 @@ void advanceHostTimeStep(const Parameters &parameters, const IntegrationCoeffici
         a[i] = integrationStageA(parameters.integrator, parameters.timeStep, i, coefficientPointers,
                                  state[i], n1[i]);
     });
+    enforceConstraints(a);
     rightHandSide(a, n2);
     if (!n3.empty()) {
         forEachIndex(state.size(), [&](std::size_t i) {
             b[i] = integrationStageB(parameters.integrator, i, coefficientPointers, state[i], n1[i],
                                      n2[i]);
         });
+        enforceConstraints(b);
         rightHandSide(b, n3);
     }
     if (!n4.empty()) {
         forEachIndex(state.size(), [&](std::size_t i) {
             c[i] = integrationStageC(i, coefficientPointers, state[i], n1[i], n3[i]);
         });
+        enforceConstraints(c);
         rightHandSide(c, n4);
     }
     forEachIndex(state.size(), [&](std::size_t i) {

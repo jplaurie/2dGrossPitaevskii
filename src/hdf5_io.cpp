@@ -78,9 +78,21 @@ void writeStringAttribute(hid_t object, const char *name, const char *value) {
                    std::string("cannot write HDF5 attribute: ") + name);
 }
 
+void requireScalarAttribute(hid_t attribute, const char *name) {
+    DataSpace space(requireId(H5Aget_space(attribute), "cannot inspect HDF5 attribute space"));
+    if (H5Sget_simple_extent_type(space.get()) != H5S_SCALAR)
+        throw std::runtime_error(std::string("HDF5 attribute must be scalar: ") + name);
+}
+
 template <class T> T readScalarAttribute(hid_t object, const char *name, hid_t type) {
     Attribute attribute(requireId(H5Aopen(object, name, H5P_DEFAULT),
                                   std::string("missing HDF5 attribute: ") + name));
+    requireScalarAttribute(attribute.get(), name);
+    DataType storedType(
+        requireId(H5Aget_type(attribute.get()), "cannot inspect HDF5 attribute type"));
+    const H5T_class_t typeClass = H5Tget_class(storedType.get());
+    if (typeClass != H5T_INTEGER && typeClass != H5T_FLOAT)
+        throw std::runtime_error(std::string("HDF5 attribute must be numeric: ") + name);
     T value{};
     requireSuccess(H5Aread(attribute.get(), type, &value),
                    std::string("cannot read HDF5 attribute: ") + name);
@@ -90,7 +102,11 @@ template <class T> T readScalarAttribute(hid_t object, const char *name, hid_t t
 std::string readStringAttribute(hid_t object, const char *name) {
     Attribute attribute(requireId(H5Aopen(object, name, H5P_DEFAULT),
                                   std::string("missing HDF5 attribute: ") + name));
+    requireScalarAttribute(attribute.get(), name);
     DataType type(requireId(H5Aget_type(attribute.get()), "cannot inspect HDF5 string attribute"));
+    if (H5Tget_class(type.get()) != H5T_STRING || H5Tis_variable_str(type.get()) != 0)
+        throw std::runtime_error(std::string("HDF5 attribute must be a fixed-length string: ") +
+                                 name);
     const std::size_t size = H5Tget_size(type.get());
     if (size == 0 || size > 1024)
         throw std::runtime_error("invalid HDF5 string attribute size");

@@ -13,7 +13,9 @@ int main(int argc, char **argv) {
         backendReady = true;
         {
             const std::filesystem::path parameterFile = argc > 1 ? argv[1] : "params.txt";
-            Parameters parameters = readParameters(parameterFile);
+            // A checkpoint is self-contained. Only the fresh-run path needs
+            // the original initial-condition file and checks it when opening it.
+            Parameters parameters = readParameters(parameterFile, false);
             auto backend = makeBackend(parameters);
             Solver solver(std::move(parameters), std::move(backend));
             solver.run();
